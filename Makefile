@@ -1,2 +1,2 @@
-all: pixelDrawer.c
-	gcc -Wall pixelDrawer.c -o pixelDrawer.exe -lgdi32
+all: main.c
+	gcc -Wall main.c -o LightYearWarsC.exe -lgdi32
