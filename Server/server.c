@@ -3,33 +3,12 @@
  * @file main.c
  * @author abmize
 */
-#define UNICODE
-#define _UNICODE
-#include <winsock2.h>
-#include <windows.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <math.h>
-#include <ws2tcpip.h>
-#include <profileapi.h>
-#include <wingdi.h>
+#include "Server/server.h"
 
 //Used to exit main program loop.
 static bool running = true;
 
-struct {
-    int width;
-    int height;
-    uint32_t *pixels;
-} frame = {0};
-
-#if RAND_MAX == 32767
-#define Rand32() ((rand() << 16) + (rand() << 1) + (rand() & 1))
-#else
-#define Rand32() rand()
-#endif
+Frame frame = {0};
 
 //Tells GDI about the pixel format
 static BITMAPINFO frame_bitmap_info;
@@ -122,24 +101,6 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
     return 0;
 }
 
-static inline int64_t GetTicks() {
-    LARGE_INTEGER ticks;
-    if (!QueryPerformanceCounter(&ticks)) {
-        printf("QueryPerformanceCounter failed.\n");
-        return 0;
-    }
-    return ticks.QuadPart;
-}
-
-static inline int64_t GetTickFrequency() {
-    LARGE_INTEGER frequency;
-    if (!QueryPerformanceFrequency(&frequency)) {
-        printf("QueryPerformanceFrequency failed.\n");
-        return 0;
-    }
-    return frequency.QuadPart;
-}
-
 /**
  * Starting point for the program.
  * @param hInstance Handle to the current instance of the program.
@@ -152,6 +113,10 @@ static inline int64_t GetTickFrequency() {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, int nCmdShow) {
     // Force printf to flush immediately
     setvbuf(stdout, NULL, _IONBF, 0);
+
+    // Suppresses -Wunused-parameter warning for hPrevInstance and pCmdLine
+    (void)hPrevInstance;
+    (void)pCmdLine;
 
     // Create the window class to hold information about the window.
     static WNDCLASS window_class = {0};
@@ -204,63 +169,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     ShowWindow(window_handle, nCmdShow);
 
     bool red = true;
-    printf("Starting UDP listener on port 6767...\n");
+    printf("Starting UDP listener on port %d...\n", SERVER_PORT);
 
     // We set up a UDP socket to listen for messages from some other computer.
     // We will then respond to it with "Ok", then change the screen color from red to blue or vice versa.
 
     // WinSock initialization
-    // WSADATA is a structure that is filled with information about the Windows Sockets implementation.
-    WSADATA wsaData;
-    // WSAStartup is a function that initializes the Windows Sockets DLL.
-    // Here, we are requesting version 2.2 of the Windows Sockets specification.
-    if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
-        // WSAGetLastError retrieves the error code for the last Windows Sockets operation that failed.
-        printf("WSAStartup failed: %d\n", WSAGetLastError());
+    if (!InitializeWinsock()) {
         return EXIT_FAILURE;
     }
+
     // Create a UDP socket
-    // AF_INET specifies the address family (IPv4)
-    // SOCK_DGRAM specifies the socket type (datagram/UDP)
-    // IPPROTO_UDP specifies the protocol (UDP)
-    SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-    // recvfrom is a blocking function, so the program will wait at that call until a message is received.
-    // We don't want it to block though, so we set the socket to non-blocking mode.
-    u_long mode = 1; // 1 to enable non-blocking mode
-
-    // ioctlsocket is used to control aspects of the socket's behavior.
-    // The first argument is the socket to modify.
-    // The second argument is the command to execute (FIONBIO to set non-blocking mode).
-    // The third argument is a pointer to the value to set (mode).
-    // Had mode been 0, it would set the socket to blocking mode.
-    // With it set to 1, recvfrom will return immediately if there is no data to read.
-    // bytes_received will be SOCKET_ERROR and WSAGetLastError will return WSAEWOULDBLOCK.
-    ioctlsocket(sock, FIONBIO, &mode);
-
+    SOCKET sock = CreateUDPSocket();
     if (sock == INVALID_SOCKET) {
-        printf("Socket creation failed: %d\n", WSAGetLastError());
-        // The documentation also says we should have a call to WSACleanup when we're done with Winsock
-        // but apparently when exiting, Windows automatically cleans up anyway.
         return EXIT_FAILURE;
     }
 
-    // Set up the local address structure
-    SOCKADDR_IN local_address;
-    // AF_INET says that the address family is IPv4 for this socket
-    local_address.sin_family = AF_INET;
-    // The assignment of the port number is wrapped in a call to htons (host to network short), 
-    // this converts the port number from whatever endianness the executing machine has, to big-endian.
-    local_address.sin_port = htons( 6767 ); 
-    // INADDR_ANY means that we will accept messages sent to any of the local machine's IP addresses 
-    // (of course, it has to be sent to the correct port as well, 6767 in this case).
-    local_address.sin_addr.s_addr = INADDR_ANY;
+    // Set non-blocking mode
+    if (!SetNonBlocking(sock)) {
+        return EXIT_FAILURE;
+    }
+
     // Bind the socket to the local address and port number
-    // bind() takes a socket, a pointer to a sockaddr structure (we have to cast our SOCKADDR_IN pointer to a SOCKADDR pointer),
-    // and the size of the address structure.
-    if( bind( sock, (SOCKADDR*)&local_address, sizeof( local_address ) ) == SOCKET_ERROR )
-    {
-        printf( "bind failed: %d", WSAGetLastError() );
+    if (!BindSocket(sock, SERVER_PORT)) {
         return EXIT_FAILURE;
     }
 

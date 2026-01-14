@@ -1,25 +1,23 @@
 /**
  * Companion client for Light Year Wars C.
  * Sends greetings to the server and waits for "Ok".
+ * @author abmize
  * @file client.c
  */
-#define UNICODE
-#define _UNICODE
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-
-#define SERVER_PORT 6767
-#define SERVER_IP "107.13.173.255"
+#include "Client/client.h"
 
 int main() {
     // Force printf to flush immediately
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    WSADATA wsaData;
+    // Ask user for server IP and port
+    char Server_IP[INET_ADDRSTRLEN];
+    int Server_Port;
+    printf("Enter server IP address: ");
+    scanf("%s", Server_IP);
+    printf("Enter server port: ");
+    scanf("%d", &Server_Port);
+
     SOCKET client_socket;
     struct sockaddr_in server_addr;
     char buffer[512];
@@ -28,40 +26,30 @@ int main() {
     bool received_ok = false;
 
     // Initialize Winsock
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        printf("WSAStartup failed: %d\n", WSAGetLastError());
+    if (!InitializeWinsock()) {
         return EXIT_FAILURE;
     }
 
     // Create socket
-    client_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    client_socket = CreateUDPSocket();
     if (client_socket == INVALID_SOCKET) {
-        printf("Socket creation failed: %d\n", WSAGetLastError());
         WSACleanup();
         return EXIT_FAILURE;
     }
 
     // Set receive timeout to 1 second
-    DWORD timeout = 1000;
-    if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout)) < 0) {
+    if (!SetSocketTimeout(client_socket, 1000)) {
         printf("setsockopt failed\n");
     }
 
     // Server address setup
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
-    
-    // Convert IP address from string to binary form
-    // Using InetPtonA explicitly since we are passing a char* string
-    if (InetPtonA(AF_INET, SERVER_IP, &server_addr.sin_addr) != 1) {
-        printf("Invalid address / Address not supported\n");
+    if (!CreateAddress(Server_IP, Server_Port, &server_addr)) {
         closesocket(client_socket);
         WSACleanup();
         return EXIT_FAILURE;
     }
 
-    printf("Client started. Sending to %s:%d\n", SERVER_IP, SERVER_PORT);
+    printf("Client started. Sending to %s:%d\n", Server_IP, Server_Port);
 
     while (!received_ok) {
         // Send message
