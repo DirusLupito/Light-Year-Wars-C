@@ -332,7 +332,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 DrawCircle((float)window_width * 0.5f,
                             (float)window_height * 0.5f,
                             50.0f,
-                            64,
+                            128,
                             2.0f);
             }
 
@@ -445,6 +445,14 @@ static bool InitializeOpenGL(HWND window_handle) {
     // and use smooth shading for better visual quality.
     glDisable(GL_DEPTH_TEST);
     glShadeModel(GL_SMOOTH);
+
+    // Enable blending for transparent colors and anti-aliasing
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Enable line smoothing for anti-aliased lines
+    glEnable(GL_LINE_SMOOTH);
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 
     // Set the initial viewport and projection matrix
     // This ensures that the OpenGL rendering area matches the window size.
