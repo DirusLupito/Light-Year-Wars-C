@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g -I.
 LDFLAGS = -lws2_32
-GDI_FLAGS = -lgdi32
+GDI_FLAGS = -lgdi32 -lopengl32
 
 # Directories
 SERVER_DIR = Server
@@ -9,7 +9,7 @@ CLIENT_DIR = Client
 UTILS_DIR = Utilities
 
 # Source Files
-SERVER_SRC = $(SERVER_DIR)/server.c $(UTILS_DIR)/networkUtilities.c $(UTILS_DIR)/gameUtilities.c
+SERVER_SRC = $(SERVER_DIR)/server.c $(UTILS_DIR)/networkUtilities.c $(UTILS_DIR)/gameUtilities.c $(UTILS_DIR)/renderUtilities.c
 CLIENT_SRC = $(CLIENT_DIR)/client.c $(UTILS_DIR)/networkUtilities.c
 
 # Targets

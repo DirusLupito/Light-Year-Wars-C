@@ -17,8 +17,11 @@
 #include <math.h>
 #include <ws2tcpip.h>
 #include <wingdi.h>
+#include <string.h>
+#include <GL/gl.h>
 #include "Utilities/gameUtilities.h"
 #include "Utilities/networkUtilities.h"
+#include "Utilities/renderUtilities.h"
 
 // Macros
 #if RAND_MAX == 32767
@@ -28,12 +31,5 @@
 #endif
 
 #define SERVER_PORT 6767
-
-// Type Definitions
-typedef struct {
-    int width;
-    int height;
-    uint32_t *pixels;
-} Frame;
 
 #endif // _SERVER_H_

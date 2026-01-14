@@ -5,17 +5,33 @@
 */
 #include "Server/server.h"
 
-//Used to exit main program loop.
+// Used to exit the main loop.
 static bool running = true;
 
-Frame frame = {0};
+// The device context and rendering context for OpenGL.
+// A device context is a Windows structure that defines a set of graphic objects
+// and their associated attributes, as well as the graphic modes that affect output.
+static HDC window_device_context = NULL;
 
-//Tells GDI about the pixel format
-static BITMAPINFO frame_bitmap_info;
-//Bitmap handle to encapsulate the bitmap data
-static HBITMAP frame_bitmap = 0;
-//Device context handle to point to the bitmap handle (redundant, but necessary to use GDI)
-static HDC frame_device_context = 0;
+// The rendering context is an OpenGL structure that holds all of OpenGL's state information
+// for drawing to a device context.
+static HGLRC window_render_context = NULL;
+
+// OpenGL font display list base and window dimensions.
+// This is used for rendering text.
+// If for example, this equals 1000, then the display list for the character 'A' (ASCII 65) would be 1065.
+// The display list is a compiled set of OpenGL commands that can be executed more efficiently.
+// This is useful for rendering text because each character can be drawn with a single call to the display list.
+static GLuint font_display_list_base = 0;
+
+// Window dimensions
+static int window_width = 0;
+static int window_height = 0;
+
+// Forward declarations of static functions
+static bool InitializeOpenGL(HWND window_handle);
+static void ShutdownOpenGL(HWND window_handle);
+static void UpdateProjection(int width, int height);
 
 /**
  * Window procedure that handles messages sent to the window.
@@ -27,78 +43,50 @@ static HDC frame_device_context = 0;
 */
 LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-        case WM_QUIT:
+        case WM_CLOSE: {
+            DestroyWindow(window_handle);
+            return 0;
+        }
         case WM_DESTROY: {
             running = false;
-        } break;
+            PostQuitMessage(0);
+            return 0;
+        }
 
         //All window drawing has to happen inside the WM_PAINT message.
         case WM_PAINT: {
-            static PAINTSTRUCT paint;
-            static HDC device_context;
+            PAINTSTRUCT paint;
             //In order to enable window drawing, BeginPaint must be called.
             //It fills out the PAINTSTRUCT and gives a device context handle for painting
-            device_context = BeginPaint(window_handle, &paint);
-            //BitBlt will copy the pixel array data over to the window in the specified rectangle
-            //It is given the window painting device context, 
-            //and the left, top, width and height of the area which is to be (re)painted.
-            //Here, it is possible to just pass in 0, 0, window width, window height, 
-            //but instead the paint structure rectangle is passed in 
-            //so as to only paint the area that needs to be painted.
-            BitBlt(device_context,
-                   paint.rcPaint.left, 
-                   paint.rcPaint.top,
-                   paint.rcPaint.right - paint.rcPaint.left, 
-                   paint.rcPaint.bottom - paint.rcPaint.top,
-                   frame_device_context,
-                   paint.rcPaint.left, 
-                   paint.rcPaint.top,
-                   SRCCOPY);
+            BeginPaint(window_handle, &paint);
+            
             //If end paint is not called, everything seems to work, 
             //but the documentation says that it is necessary.
             EndPaint(window_handle, &paint);
-        } break;
+            return 0;
+        }
 
         //WM_SIZE is sent when the window is created or resized.
-        //This makes it an ideal place to assign the size of the pixel array
-        //and finish setting up the GDI bitmap.
+        //This makes it an ideal place to assign the size of the OpenGL viewport.
         case WM_SIZE: {
-            //Get the width and height of the window.
-            frame_bitmap_info.bmiHeader.biWidth  = LOWORD(lParam);
-            frame_bitmap_info.bmiHeader.biHeight = HIWORD(lParam);
+            // LOWORD and HIWORD extract the low-order and high-order words from lParam,
+            // as it is expected that if a WM_SIZE message is sent,
+            // the width and height of the client area are packed into lParam.
+            window_width = LOWORD(lParam);
+            window_height = HIWORD(lParam);
 
-            //If the bitmap object was already created, then delete it
-            //then create a new bitmap with the unchanged info from before 
-            //and the new width and height
-
-            if(frame_bitmap) DeleteObject(frame_bitmap);
-            //DIB_RGB_COLORS just tells CreateDIBSection what kind of data is being used
-            //A pointer to the pixel array pointer is passed in
-            //CreateDIBSection will fill the pixel array pointer with an address to some memory 
-            //big enough to hold the type and quantity of pixels wanted, 
-            //based on the width, height and bits per pixel.
-            frame_bitmap = CreateDIBSection(NULL, 
-            &frame_bitmap_info, 
-            DIB_RGB_COLORS, (void**)&frame.pixels, 
-            0, 
-            0);
-            //SelectObject is used to point the device context to it
-            SelectObject(frame_device_context, frame_bitmap);
-            //At this point the GDI objects and pixel array memory are setup
-
-            frame.width =  LOWORD(lParam);
-            frame.height = HIWORD(lParam);
-
-        } break;
-
-
+            // We need to update the OpenGL projection matrix to match the new window size.
+            // If we don't do this, the aspect ratio will be incorrect
+            // and the rendered scene will appear stretched or squashed.
+            UpdateProjection(window_width, window_height);
+            return 0;
+        }
         default: {
             //If the message is not handled by this procedure, 
             //pass it to the default window procedure.
             return DefWindowProc(window_handle, msg, wParam, lParam);
-        } break;
+        }
     }
-    return 0;
 }
 
 /**
@@ -109,8 +97,9 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
  *                line arguments for the application, excluding the program name.
  * @param nCmdShow Specifies how the window is to be shown.
  * @return 0 if the program terminates successfully, non-zero otherwise.
-*/
+ */
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, int nCmdShow) {
+
     // Force printf to flush immediately
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -120,13 +109,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     // Create the window class to hold information about the window.
     static WNDCLASS window_class = {0};
+
     //L = wide character string literal
     //This name is used to reference the window class later.
     static const wchar_t window_class_name[] = L"PixelDrawer";
-    //Set up the window class name.
+
+    // Window class style affects the behavior of the window.
+    // Here, we use CS_OWNDC to allocate a unique device context for the window.
+    // This is important for OpenGL rendering, as it ensures that the rendering context
+    // is tied to a specific device context that won't be shared with other windows.
+    // Were it to be shared, it could lead to rendering issues and performance problems.
+    // For example, let's say two windows share the same device context,
+    // and one window changes the pixel format or other attributes of the device context.
+    // This could inadvertently affect the rendering of the other window,
+    // leading to unexpected visual artifacts or performance degradation.
+    window_class.style = CS_OWNDC;
     window_class.lpszClassName = window_class_name;
+
     //Set up a pointer to a function that windows will call to handle events, or messages.
     window_class.lpfnWndProc = WindowProcessMessage;
+
+    // The instance handle is a unique identifier for the application.
+    // You might see it used in various Windows API functions to identify the application.
     window_class.hInstance = hInstance;
 
     //Register the window class with windows.
@@ -135,40 +139,38 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         exit(1);
     }
 
-    //Set up the bitmap info.
-    frame_bitmap_info.bmiHeader.biSize = sizeof(frame_bitmap_info.bmiHeader);
-    //Number of color planes is always 1.
-    frame_bitmap_info.bmiHeader.biPlanes = 1;
-    //Bits per pixel
-    //8 bits per byte, a byte for each of red, green, blue, and a filler byte.
-    frame_bitmap_info.bmiHeader.biBitCount = 32;
-    //Compression type is uncompressed RGB.
-    frame_bitmap_info.bmiHeader.biCompression = BI_RGB;
-    //Create the device context handle.
-    frame_device_context = CreateCompatibleDC(0);
-
-    //Create the window.
-    HWND window_handle = CreateWindow(window_class_name, //Name of the window class.
-                                      L"Light Year Wars", //Title of the window.
-                                      WS_OVERLAPPEDWINDOW, //Window style.
-                                      CW_USEDEFAULT, //Initial horizontal position of the window.
-                                      CW_USEDEFAULT, //Initial vertical position of the window.
-                                      CW_USEDEFAULT, //Initial width of the window.
-                                      CW_USEDEFAULT, //Initial height of the window.
-                                      NULL, //Handle to the parent window.
-                                      NULL, //Handle to the menu.
-                                      hInstance, //Handle to the instance of the program.
-                                      NULL); //Pointer to the window creation data.
-    //Handle any errors.
+    //This creates the window.
+    HWND window_handle = CreateWindow(window_class_name, // Name of the window class
+                                      L"Light Year Wars", // Window title (seen in title bar)
+                                      WS_OVERLAPPEDWINDOW, // Window style (standard window with title bar and borders)
+                                      CW_USEDEFAULT, // Initial horizontal position of the window
+                                      CW_USEDEFAULT, // Initial vertical position of the window
+                                      CW_USEDEFAULT, // Initial width of the window
+                                      CW_USEDEFAULT, // Initial height of the window
+                                      NULL, // Handle to parent window (there is none here)
+                                      NULL, // Handle to menu (there is none here)
+                                      hInstance, // Handle to application instance
+                                      NULL); // Pointer to window creation data (not used here)
+    
+    // Check if window creation was successful
     if (!window_handle) {
         printf("CreateWindow failed.\n");
         exit(1);
     }
 
-    //Actually show the window.
+    // If this isn't called, the window will be created but not shown.
+    // So you might see the program running in the task manager,
+    // but there won't be any visible window on the screen.
     ShowWindow(window_handle, nCmdShow);
 
-    bool red = true;
+    // Initialize OpenGL for the created window
+    if (!InitializeOpenGL(window_handle)) {
+        printf("OpenGL initialization failed.\n");
+        DestroyWindow(window_handle);
+        return EXIT_FAILURE;
+    }
+
+    float opacity = 1.0f;
     printf("Starting UDP listener on port %d...\n", SERVER_PORT);
 
     // We set up a UDP socket to listen for messages from some other computer.
@@ -176,29 +178,37 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     // WinSock initialization
     if (!InitializeWinsock()) {
+        // It's very important to clean up OpenGL resources if initialization fails.
+        // Without this cleanup, resources like device contexts and rendering contexts
+        // could remain allocated, leading to memory leaks and other mysterious issues
+        // like windows having to be force shut down because it thinks some resources are still in use.
+        ShutdownOpenGL(window_handle);
         return EXIT_FAILURE;
     }
 
     // Create a UDP socket
     SOCKET sock = CreateUDPSocket();
     if (sock == INVALID_SOCKET) {
+        ShutdownOpenGL(window_handle);
         return EXIT_FAILURE;
     }
 
     // Set non-blocking mode
     if (!SetNonBlocking(sock)) {
+        ShutdownOpenGL(window_handle);
         return EXIT_FAILURE;
     }
 
     // Bind the socket to the local address and port number
     if (!BindSocket(sock, SERVER_PORT)) {
+        ShutdownOpenGL(window_handle);
         return EXIT_FAILURE;
     }
 
     // Buffer to hold incoming messages
     char recv_buffer[512];
 
-    // Delta time
+    // Delta time calculation variables
     int64_t previous_ticks = GetTicks();
     int64_t frequency = GetTickFrequency();
 
@@ -207,11 +217,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     //Main program loop.
     while (running) {
         //Handle any messages sent to the window.
-        static MSG message = {0};
+        MSG message;
         //Check for the next message and remove it from the message queue.
-        while(PeekMessage(&message, NULL, 0, 0, PM_REMOVE)) {
+        while (PeekMessage(&message, NULL, 0, 0, PM_REMOVE)) {
             //Takes virtual keystrokes and adds any applicable character messages to the queue.
             TranslateMessage(&message);
+
             //Sends the message to the window procedure which handles messages.
             DispatchMessage(&message);
         }
@@ -258,7 +269,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             printf("Received message: %s\n", recv_buffer);
 
             // If we received a message, we respond with "Ok"
-            const char *response_message = "Ok";
+            const char* response_message = "Ok";
 
             // Send the response back to the sender
             // sendto takes the following arguments here:
@@ -281,50 +292,290 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             if (bytes_sent == SOCKET_ERROR) {
                 printf("sendto failed: %d\n", WSAGetLastError());
             }
-            // Toggle the screen color between red and blue
-            red = !red;
+            // Reset opacity to make the window fully blue
+            opacity = 1.0f;
         }
 
-        // Here is where game logic and pixel drawing code would go.
-        // For example, to fill the screen with red pixels then alternate to blue:
-        if(red) {
-            for(int y = 0; y < frame.height; y++) {
-                for(int x = 0; x < frame.width; x++) {
-                    frame.pixels[y * frame.width + x] = 0x000000FF; // Red in 0xAABBGGRR format
-                }
+        // Calculate delta time
+        int64_t current_ticks = GetTicks();
+        float delta_time = (float)(current_ticks - previous_ticks) / (float)frequency;
+        previous_ticks = current_ticks;
+
+        // Decrease opacity over time
+        opacity -= 0.5f * delta_time;
+
+        // Clamp opacity to [0.0, 1.0]
+        if (opacity < 0.0f) {
+            opacity = 0.0f;
+        }
+
+        // Calculate frames per second (FPS)
+        float fps = 0.0f;
+
+        // Make sure not to divide by zero if we lag too hard
+        // (lag is bad enough, no reason to make it worse with a crash)
+        if (delta_time > 0.0f) {
+            fps = 1.0f / delta_time;
+        }
+
+        if (window_device_context && window_render_context) {
+            float background_red = 1.0f - opacity;
+            float background_blue = opacity;
+            glClearColor(background_red, 0.0f, background_blue, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
+
+            if (window_width > 0 && window_height > 0) {
+                glColor3f(1.0f, 1.0f, 1.0f);
+                DrawCircle((float)window_width * 0.5f,
+                            (float)window_height * 0.5f,
+                            50.0f,
+                            64,
+                            2.0f);
             }
-        } else {
-            for(int y = 0; y < frame.height; y++) {
-                for(int x = 0; x < frame.width; x++) {
-                    frame.pixels[y * frame.width + x] = 0x00FF0000; // Blue in 0xAABBGGRR format
-                }
+
+            if (font_display_list_base && window_width >= 10 && window_height >= 10) {
+                char fps_string[32];
+                snprintf(fps_string, sizeof(fps_string), "FPS: %.0f", fps);
+                glColor3f(1.0f, 1.0f, 1.0f);
+                glRasterPos2f(10.0f, 20.0f);
+                glPushAttrib(GL_LIST_BIT);
+                glListBase(font_display_list_base - 32);
+                glCallLists((GLsizei)strlen(fps_string), GL_UNSIGNED_BYTE, fps_string);
+                glPopAttrib();
             }
-        }
 
-        // If the game window is big enough, also display an FPS counter in the top-left corner
-        if(frame.width >= 10 && frame.height >= 10) {
-            int64_t current_ticks = GetTicks();
-            float delta_time = (float)(current_ticks - previous_ticks) / (float)frequency;
-            previous_ticks = current_ticks;
-            float fps = 1.0f / delta_time;
-            // Simple FPS counter drawing (white text on black background)
-            int fps_int = (int)(fps + 0.5f);
-            char fps_string[16];
-            snprintf(fps_string, sizeof(fps_string), "FPS: %d", fps_int);
-            // fps_string must be a TCHAR string for Windows API
-            SetBkColor(frame_device_context, RGB(0, 0, 0)); // Black background
-            SetTextColor(frame_device_context, RGB(255, 255, 255)); // White text
-            TextOutA(frame_device_context, 10, 10, fps_string, (int)strlen(fps_string));    
+            SwapBuffers(window_device_context);
         }
-
-        //In games, it is usually desirable to redraw the full window many times per second
-        //InvalidateRect marks a section of the window as invalid and needing to be redrawn.
-        //Passing in NULL invalidates the entire window.
-        InvalidateRect(window_handle, NULL, FALSE);
-        //UpdateWindow immediately passes a WM_PAINT message to WindowProcessMessage 
-        //rather than waiting until the next message processing loop
-        UpdateWindow(window_handle);
     }
 
+    // At this point in the code, we are exiting the main loop and need to clean up resources.
+    ShutdownOpenGL(window_handle);
     return EXIT_SUCCESS;
+}
+
+/**
+ * Initializes OpenGL for the given window.
+ * @param window_handle Handle to the window.
+ * @return true if successful, false otherwise.
+ */
+static bool InitializeOpenGL(HWND window_handle) {
+    
+    // A PIXELFORMATDESCRIPTOR describes the pixel format of a drawing surface.
+    // It specifies properties such as color depth, buffer types, and other attributes.
+    PIXELFORMATDESCRIPTOR pfd = {
+        sizeof(PIXELFORMATDESCRIPTOR), // Size of this structure
+        1, // Version number
+        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER, // Flags (draw to window, support OpenGL, double buffering)
+        PFD_TYPE_RGBA, // The kind of framebuffer. RGBA or palette.
+        32, // Color depth in bits
+        0, 0, 0, 0, 0, 0, // From left to right: Red bits, Red shift, Green bits, Green shift, Blue bits, Blue shift
+        0, // Alpha bits
+        0, // Alpha shift
+        0, // Accumulation buffer bits
+        0, 0, 0, 0, // From left to right: Accumulation red bits, green bits, blue bits, alpha bits
+        24, // Depth buffer bits
+        8, // Stencil buffer bits
+        0, // Auxiliary buffer bits
+        PFD_MAIN_PLANE, // Layer type (main drawing layer)
+        0, // Reserved
+        0, 0, 0 // Layer masks (ignored for main plane)
+    };
+
+    // Get the device context for the window
+    // This essentially prepares the window for OpenGL rendering
+    // by obtaining a handle to its device context.
+    window_device_context = GetDC(window_handle);
+
+    // Check if device context retrieval was successful
+    if (!window_device_context) {
+        printf("GetDC failed.\n");
+        return false;
+    }
+
+    // A pixel format defines how pixels are stored and represented in a drawing surface.
+    // This can be things like color depth, buffer types, and other attributes.
+
+    // Choose a pixel format that matches the desired properties
+    int pixel_format = ChoosePixelFormat(window_device_context, &pfd);
+
+    // Check if pixel format selection was successful
+    if (pixel_format == 0) {
+        printf("ChoosePixelFormat failed.\n");
+        ReleaseDC(window_handle, window_device_context);
+        window_device_context = NULL;
+        return false;
+    }
+
+    // Set the chosen pixel format for the device context
+    if (!SetPixelFormat(window_device_context, pixel_format, &pfd)) {
+        printf("SetPixelFormat failed.\n");
+        ReleaseDC(window_handle, window_device_context);
+        window_device_context = NULL;
+        return false;
+    }
+
+    // An OpenGL rendering context is a data structure that stores all of OpenGL's state information
+    // for drawing to a device context. It is required for any OpenGL rendering to occur.
+
+    // Create the OpenGL rendering context
+    window_render_context = wglCreateContext(window_device_context);
+    if (!window_render_context) {
+        printf("wglCreateContext failed.\n");
+        ReleaseDC(window_handle, window_device_context);
+        window_device_context = NULL;
+        return false;
+    }
+
+    // Make the rendering context current
+    if (!wglMakeCurrent(window_device_context, window_render_context)) {
+        printf("wglMakeCurrent failed.\n");
+        wglDeleteContext(window_render_context);
+        window_render_context = NULL;
+        ReleaseDC(window_handle, window_device_context);
+        window_device_context = NULL;
+        return false;
+    }
+
+    // Set up some basic OpenGL state
+    // By default, OpenGL enables depth testing and flat shading.
+    // For this application, we want to disable depth testing
+    // and use smooth shading for better visual quality.
+    glDisable(GL_DEPTH_TEST);
+    glShadeModel(GL_SMOOTH);
+
+    // Set the initial viewport and projection matrix
+    // This ensures that the OpenGL rendering area matches the window size.
+    RECT client_rect;
+    if (GetClientRect(window_handle, &client_rect)) {
+        window_width = client_rect.right - client_rect.left;
+        window_height = client_rect.bottom - client_rect.top;
+        UpdateProjection(window_width, window_height);
+    }
+
+    // Create a font for rendering text in OpenGL
+    HFONT font = CreateFontA(-16, // Height of font. This is negative to indicate character height rather than cell height
+                             0, // Width of font. 0 means default width based on height
+                             0, // Angle of escapement. Escapement is the angle between the baseline of a character and the x-axis of the device.
+                             0, // Orientation angle. This is the angle between the baseline of a character and the x-axis of the device.
+                             FW_NORMAL, // Font weight. FW_NORMAL is normal weight.
+                             FALSE, // Italic attribute option
+                             FALSE, // Underline attribute option
+                             FALSE, // Strikeout attribute option
+                             ANSI_CHARSET, // Character set identifier
+                             OUT_TT_PRECIS, // Output precision. TT means TrueType.
+                             CLIP_DEFAULT_PRECIS, // Clipping precision
+                             ANTIALIASED_QUALITY, // Output quality
+                             FF_DONTCARE | DEFAULT_PITCH, // Family and pitch of the font (don't care about family, default pitch)
+                             "Segoe UI"); // Typeface name
+
+    // If font creation was successful, create display lists for characters 32 to 127
+    if (font) {
+        // Generate display lists for 96 characters (from ASCII 32 to 127)
+        font_display_list_base = glGenLists(96);
+
+        // If display list generation was successful, create the font bitmaps
+        if (font_display_list_base) {
+
+            // HFONT is a handle to a font object
+            // Here we select the created font into the device context
+            // so that we can create bitmaps for the font characters.
+            HFONT old_font = (HFONT)SelectObject(window_device_context, font);
+
+            // wglUseFontBitmapsA creates a set of bitmap display lists for the glyphs
+            // of the currently selected font in the specified device context.
+            if (!wglUseFontBitmapsA(window_device_context, 32, 96, font_display_list_base)) {
+
+                // If wglUseFontBitmapsA fails, we clean up the generated display lists
+                glDeleteLists(font_display_list_base, 96);
+
+                // Reset font_display_list_base to 0 to indicate failure
+                font_display_list_base = 0;
+            }
+
+            // Restore the previous font in the device context
+            SelectObject(window_device_context, old_font);
+        }
+
+        // We can delete the font object now, as the display lists have been created
+        DeleteObject(font);
+    }
+
+    return true;
+}
+
+
+/**
+ * Shuts down OpenGL and releases resources.
+ * @param window_handle Handle to the window.
+ */
+static void ShutdownOpenGL(HWND window_handle) {
+
+    // Delete the OpenGL rendering context and release the device context
+    if (window_render_context) {
+
+        // If we created display lists for the font, delete them
+        if (font_display_list_base) {
+            glDeleteLists(font_display_list_base, 96);
+            font_display_list_base = 0;
+        }
+
+        // Turn off the current rendering context
+        // wglMakeCurrent(NULL, NULL) disassociates the current rendering context from the device context.
+        // This is important to do before deleting the rendering context itself.
+        wglMakeCurrent(NULL, NULL);
+
+        // Here, we actually delete the rendering context
+        wglDeleteContext(window_render_context);
+        window_render_context = NULL;
+    }
+
+    // Release the device context for the window
+    if (window_device_context) {
+
+        // ReleaseDC releases the device context previously obtained by GetDC.
+        ReleaseDC(window_handle, window_device_context);
+        window_device_context = NULL;
+    }
+}
+
+/**
+ * Updates the OpenGL projection matrix based on the new window size.
+ * @param width The new width of the window.
+ * @param height The new height of the window.
+ */
+static void UpdateProjection(int width, int height) {
+
+    // If the rendering context is not initialized, we cannot update the projection
+    if (!window_render_context || width <= 0 || height <= 0) {
+        return;
+    }
+
+    // glViewport sets the viewport, which is the rectangular area of the window where OpenGL will draw.
+    // It's parameters are from left to right:
+    // x-axis position of the lower left corner of the viewport rectangle, in pixels.
+    // y-axis position of the lower left corner of the viewport rectangle, in pixels.
+    // width of the viewport.
+    // height of the viewport.
+    glViewport(0, 0, width, height);
+
+    // Set up an orthographic projection matrix
+    // This defines a 2D projection where objects are the same size regardless of their depth.
+    glMatrixMode(GL_PROJECTION);
+
+    // glLoadIdentity resets the current matrix to the identity matrix.
+    // If we don't do this, the new projection matrix will be multiplied with the existing one,
+    // leading to incorrect transformations.
+    glLoadIdentity();
+
+    // glOrtho defines a 2D orthographic projection matrix.
+    // The parameters specify the clipping volume:
+    // left, right, bottom, top, near, far
+    glOrtho(0.0, (GLdouble)width, (GLdouble)height, 0.0, -1.0, 1.0);
+
+    // Switch back to the modelview matrix mode
+    // This is the matrix mode we will use for rendering objects.
+    glMatrixMode(GL_MODELVIEW);
 }
