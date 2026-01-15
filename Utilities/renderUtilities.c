@@ -123,3 +123,100 @@ void DrawRing(float cx, float cy, float innerRadius, float outerRadius, int segm
 
     // The line width does not need to be reset here since we did not change it.
 }
+
+/**
+ * Draws a ring with softened edges by feathering both the inner and outer boundaries.
+ * @param cx The x-coordinate of the center of the ring.
+ * @param cy The y-coordinate of the center of the ring.
+ * @param innerRadius Radius where the ring begins (fully transparent inside this radius).
+ * @param outerRadius Radius where the ring ends (fully transparent beyond this radius).
+ * @param segments Number of segments used to approximate the ring.
+ * @param featherWidth Width of the fade zone applied to each edge.
+ * @param color RGBA color applied to the solid portion of the ring.
+ */
+void DrawSmoothRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
+    float featherWidth, const float color[4]) {
+    if (outerRadius <= 0.0f || innerRadius < 0.0f || innerRadius >= outerRadius || segments < 3 || color == NULL) {
+        return;
+    }
+
+    float alpha = color[3];
+    if (featherWidth <= 0.0f || alpha <= 0.0f) {
+        glColor4fv(color);
+        DrawRing(cx, cy, innerRadius, outerRadius, segments);
+        return;
+    }
+
+    float ringWidth = outerRadius - innerRadius;
+    float clampedFeather = fminf(featherWidth, ringWidth * 0.5f);
+
+    float innerFadeStart = innerRadius;
+    float innerFadeEnd = innerRadius + clampedFeather;
+    float outerFadeStart = outerRadius - clampedFeather;
+    float outerFadeEnd = outerRadius;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    float opaqueColor[4] = {color[0], color[1], color[2], alpha};
+    float transparentColor[4] = {color[0], color[1], color[2], 0.0f};
+
+    if (innerFadeEnd > innerFadeStart) {
+        DrawRadialGradientRing(cx, cy, innerFadeStart, innerFadeEnd, segments, transparentColor, opaqueColor);
+    }
+
+    if (outerFadeEnd > outerFadeStart) {
+        DrawRadialGradientRing(cx, cy, outerFadeStart, outerFadeEnd, segments, opaqueColor, transparentColor);
+    }
+
+    if (outerFadeStart > innerFadeEnd) {
+        glColor4fv(color);
+        DrawRing(cx, cy, innerFadeEnd, outerFadeStart, segments);
+    }
+
+    glDisable(GL_BLEND);
+}
+
+/**
+ * Draws a radial gradient ring (or disc) using OpenGL.
+ * The gradient smoothly transitions from the inner color at innerRadius
+ * to the outer color at outerRadius around the given center point.
+ * If innerRadius is zero, the gradient collapses to a solid disc fan.
+ * @param cx The x-coordinate of the gradient's center.
+ * @param cy The y-coordinate of the gradient's center.
+ * @param innerRadius Radius at which the inner color is applied.
+ * @param outerRadius Radius at which the outer color is applied.
+ * @param segments Number of segments used to approximate the gradient circle.
+ * @param innerColor RGBA color applied along the inner radius.
+ * @param outerColor RGBA color applied along the outer radius.
+ */
+void DrawRadialGradientRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
+    const float innerColor[4], const float outerColor[4]) {
+    if (outerRadius <= 0.0f || innerRadius < 0.0f || innerRadius > outerRadius || segments < 3) {
+        return;
+    }
+
+    // Render a triangle strip that alternates between the outer and inner radii.
+    // Each segment contributes two vertices: one on the outer ring with the outer color,
+    // and one on the inner ring with the inner color. This produces a smooth radial gradient.
+    glBegin(GL_TRIANGLE_STRIP);
+    for (int i = 0; i <= segments; ++i) {
+        // Solve for the angle around the circle
+        float angle = (float)i / (float)segments * 2.0f * (float)M_PI;
+        float cosAngle = cosf(angle);
+        float sinAngle = sinf(angle);
+
+        // Now we find the outer vertex position and color
+        float outerX = cx + cosAngle * outerRadius;
+        float outerY = cy + sinAngle * outerRadius;
+        glColor4fv(outerColor);
+        glVertex2f(outerX, outerY);
+
+        // And find the inner vertex position and color
+        float innerX = cx + cosAngle * innerRadius;
+        float innerY = cy + sinAngle * innerRadius;
+        glColor4fv(innerColor);
+        glVertex2f(innerX, innerY);
+    }
+    glEnd();
+}

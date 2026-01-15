@@ -34,6 +34,9 @@ void LevelInit(Level *level) {
 	level->starships = NULL;
 	level->starshipCount = 0;
 	level->starshipCapacity = 0;
+	level->trailEffects = NULL;
+	level->trailEffectCount = 0;
+	level->trailEffectCapacity = 0;
 	level->width = 0.0f;
 	level->height = 0.0f;
 }
@@ -58,16 +61,20 @@ void LevelRelease(Level *level) {
 	free(level->factions);
 	free(level->planets);
 	free(level->starships);
+	free(level->trailEffects);
 
     // After freeing, we set all members to NULL or zero
     // to avoid dangling pointers and stale data.
 	level->factions = NULL;
 	level->planets = NULL;
 	level->starships = NULL;
+	level->trailEffects = NULL;
 	level->factionCount = 0;
 	level->planetCount = 0;
 	level->starshipCount = 0;
 	level->starshipCapacity = 0;
+	level->trailEffectCount = 0;
+	level->trailEffectCapacity = 0;
 	level->width = 0.0f;
 	level->height = 0.0f;
 }
@@ -146,6 +153,19 @@ bool LevelConfigure(Level *level, size_t factionCount, size_t planetCount, size_
 			LevelRelease(level);
 			return false;
 		}
+		// Each starship is also associated with some data for its trail effects
+		// so we allocate that memory here as well.
+		level->trailEffects = (StarshipTrailEffect *)malloc(sizeof(StarshipTrailEffect) * starshipCapacity);
+		if (level->trailEffects == NULL) {
+			LevelRelease(level);
+			return false;
+		}
+		level->trailEffectCapacity = starshipCapacity;
+	} else {
+		// If no starship capacity is requested, 
+		// we do not need to allocate any memory for trail effects.
+		level->trailEffects = NULL;
+		level->trailEffectCapacity = 0;
 	}
 
     // With all our allocations done, we can now simply fill in the level members.
@@ -153,6 +173,7 @@ bool LevelConfigure(Level *level, size_t factionCount, size_t planetCount, size_
 	level->planetCount = planetCount;
 	level->starshipCapacity = starshipCapacity;
 	level->starshipCount = 0;
+	level->trailEffectCount = 0;
 	return true;
 }
 
@@ -192,6 +213,83 @@ static bool EnsureStarshipCapacity(Level *level, size_t minCapacity) {
 	level->starships = resized;
 	level->starshipCapacity = newCapacity;
 	return true;
+}
+
+/**
+ * Helper function to ensure the trail effect array has enough capacity
+ * to hold at least minCapacity trail effects.
+ * If the current capacity is less than minCapacity,
+ * the function will attempt to resize the array to double its current capacity
+ * until it meets or exceeds minCapacity.
+ * If resizing fails, the function will return false.
+ * @param level A pointer to the Level object.
+ * @param minCapacity The minimum required capacity for trail effects.
+ * @return true if the trail effect array has enough capacity, false otherwise.
+ */
+static bool EnsureTrailEffectCapacity(Level *level, size_t minCapacity) {
+	// We don't need to do anything if we already have enough capacity.
+	if (level->trailEffectCapacity >= minCapacity) {
+		return true;
+	}
+
+	// New capacity equals double the current capacity, or 16 if current capacity is zero.
+	// This is intentionally very similar to EnsureStarshipCapacity.
+	size_t newCapacity = level->trailEffectCapacity == 0 ? 16 : level->trailEffectCapacity * 2;
+	while (newCapacity < minCapacity) {
+		newCapacity *= 2;
+	}
+
+	// Now that we know how much memory we need, we can actually ask for it here.
+	StarshipTrailEffect *resized = (StarshipTrailEffect *)realloc(level->trailEffects, sizeof(StarshipTrailEffect) * newCapacity);
+	if (resized == NULL) {
+		return false;
+	}
+
+	// If realloc succeeded, we must update the level's trail effect pointer
+	// and also our internal memory management data on how much memory we have allocated
+	// to hold trail effects.
+	level->trailEffects = resized;
+	level->trailEffectCapacity = newCapacity;
+	return true;
+}
+
+/**
+ * Spawns a trail effect for the given starship in the level.
+ * This function creates a StarshipTrailEffect based on the starship's current trail data
+ * and adds it to the level's trail effects array.
+ * If there is not enough capacity in the trail effects array, it will attempt to resize it.
+ * @param level A pointer to the Level object.
+ * @param ship A pointer to the Starship object for which to spawn the trail effect.
+ */
+static void LevelSpawnTrailEffect(Level *level, const Starship *ship) {
+	// Basic validation of parameters.
+	if (level == NULL || ship == NULL) {
+		return;
+	}
+
+	// Ensure we have enough capacity for a new trail effect.
+	if (!EnsureTrailEffectCapacity(level, level->trailEffectCount + 1)) {
+		return;
+	}
+
+	// Create the trail effect based on the starship's trail data.
+	float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
+	// Get the starship's color for the trail effect.
+	StarshipResolveColor(ship, color);
+
+	// Initialize the trail effect.
+	StarshipTrailEffect effect = {0};
+	StarshipTrailEffectInit(&effect, ship, color);
+
+	// Only add the effect if it has alive samples.
+	if (!StarshipTrailEffectIsAlive(&effect)) {
+		return;
+	}
+
+	// Add the effect to the level's trail effects array.
+	level->trailEffects[level->trailEffectCount] = effect;
+	level->trailEffectCount += 1;
 }
 
 /**
@@ -298,6 +396,26 @@ void LevelUpdate(Level *level, float deltaTime) {
 		PlanetUpdate(&level->planets[i], deltaTime);
 	}
 
+	// Next we update all trail effects in the level.
+	// While updating each trail effect, we also check if it is still alive.
+	// If a trail effect is no longer alive, we remove it from the level.
+	// Similar to starship removal, we replace dead trail effects with the last effect
+	// in the array and decrement the trail effect count.
+	size_t trailIndex = 0;
+	while (trailIndex < level->trailEffectCount) {
+		StarshipTrailEffect *effect = &level->trailEffects[trailIndex];
+		StarshipTrailEffectUpdate(effect, deltaTime);
+		if (!StarshipTrailEffectIsAlive(effect)) {
+			size_t last = level->trailEffectCount - 1;
+			if (trailIndex != last) {
+				level->trailEffects[trailIndex] = level->trailEffects[last];
+			}
+			level->trailEffectCount -= 1;
+			continue;
+		}
+		trailIndex += 1;
+	}
+
     // And then we update all starships in the level.
     // While updating each starship, we also check for collisions with their target planets.
     // StarshipUpdate is primarily responsible for moving the starship towards its target planet,
@@ -313,6 +431,7 @@ void LevelUpdate(Level *level, float deltaTime) {
 		StarshipUpdate(ship, deltaTime);
 		if (StarshipCheckCollision(ship)) {
 			PlanetHandleIncomingShip(ship->target, ship);
+			LevelSpawnTrailEffect(level, ship);
 			LevelRemoveStarship(level, i);
 			continue;
 		}

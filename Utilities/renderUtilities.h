@@ -54,4 +54,33 @@ void DrawFilledCircle(float cx, float cy, float radius, int segments);
  */
 void DrawRing(float cx, float cy, float innerRadius, float outerRadius, int segments);
 
+/**
+ * Draws a ring with softened edges by feathering both the inner and outer boundaries.
+ * @param cx The x-coordinate of the center of the ring.
+ * @param cy The y-coordinate of the center of the ring.
+ * @param innerRadius Radius where the ring begins (fully transparent inside this radius).
+ * @param outerRadius Radius where the ring ends (fully transparent beyond this radius).
+ * @param segments Number of segments used to approximate the ring.
+ * @param featherWidth Width of the fade zone applied to each edge.
+ * @param color RGBA color applied to the solid portion of the ring.
+ */
+void DrawSmoothRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
+    float featherWidth, const float color[4]);
+
+/**
+ * Draws a radial gradient ring (or disc) using OpenGL.
+ * The gradient smoothly transitions from the inner color at innerRadius
+ * to the outer color at outerRadius around the given center point.
+ * If innerRadius is zero, the gradient collapses to a solid disc fan.
+ * @param cx The x-coordinate of the gradient's center.
+ * @param cy The y-coordinate of the gradient's center.
+ * @param innerRadius Radius at which the inner color is applied.
+ * @param outerRadius Radius at which the outer color is applied.
+ * @param segments Number of segments used to approximate the gradient circle.
+ * @param innerColor RGBA color applied along the inner radius.
+ * @param outerColor RGBA color applied along the outer radius.
+ */
+void DrawRadialGradientRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
+    const float innerColor[4], const float outerColor[4]);
+
 #endif // _RENDER_UTILITIES_H_

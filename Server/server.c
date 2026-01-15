@@ -44,6 +44,10 @@ static size_t playerCount = 0;
 // Used to track time elapsed since last snapshot broadcast.
 static float snapshotAccumulator = 0.0f;
 
+// Background color constants for rendering.
+static const float BACKGROUND_GRADIENT_INNER_COLOR[4] = {0.36f, 0.30f, 0.43f, 1.0f};
+static const float BACKGROUND_GRADIENT_OUTER_COLOR[4] = {BACKGROUND_COLOR_R, BACKGROUND_COLOR_G, BACKGROUND_COLOR_B, 1.0f};
+
 // Forward declarations of static functions
 static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
@@ -54,6 +58,7 @@ static void SendPacketToPlayer(Player *player, SOCKET sock, const LevelPacketBuf
 static bool InitializeOpenGL(HWND window_handle);
 static void ShutdownOpenGL(HWND window_handle);
 static void UpdateProjection(int width, int height);
+static void DrawBackgroundGradient(int width, int height);
 
 /**
  * Window procedure that handles messages sent to the window.
@@ -635,17 +640,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             glLoadIdentity();
 
             if (window_width > 0 && window_height > 0) {
-                 for (size_t i = 0; i < level.planetCount; ++i) {
+                // Draw the background gradient
+                DrawBackgroundGradient(window_width, window_height);
+
+                // Draw each planet in the level
+                for (size_t i = 0; i < level.planetCount; ++i) {
                     PlanetDraw(&level.planets[i]);
                 }
 
-                for (size_t i = 0; i < level.starshipCount; ++i) {
-                if (selected_planet != NULL) {
-                    float radius = PlanetGetOuterRadius(selected_planet);
-                    glColor3f(1.0f, 1.0f, 1.0f);
-                    DrawRing(selected_planet->position.x, selected_planet->position.y, radius + 2.0f, radius + 5.0f, 32);
+                // Draw each starship trail effect
+                for (size_t i = 0; i < level.trailEffectCount; ++i) {
+                    StarshipTrailEffectDraw(&level.trailEffects[i]);
                 }
 
+                // If a planet is selected, draw a ring around it
+                if (selected_planet != NULL) {
+                    float radius = PlanetGetOuterRadius(selected_planet);
+                    float highlightColor[4] = {1.0f, 1.0f, 1.0f, 0.85f};
+                    DrawSmoothRing(selected_planet->position.x, selected_planet->position.y,
+                        radius + 2.0f, radius + 5.0f, 32, 1.2f, highlightColor);
+                }
+
+                // Draw each starship in the level
+                for (size_t i = 0; i < level.starshipCount; ++i) {
                     StarshipDraw(&level.starships[i]);
                 }
             }
@@ -919,4 +936,30 @@ static void UpdateProjection(int width, int height) {
     // Switch back to the modelview matrix mode
     // This is the matrix mode we will use for rendering objects.
     glMatrixMode(GL_MODELVIEW);
+}
+
+/**
+ * Draws a radial background gradient.
+ * @param width The width of the area to draw the gradient in.
+ * @param height The height of the area to draw the gradient in.
+ */
+static void DrawBackgroundGradient(int width, int height) {
+    // Basic validation of input dimensions.
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    // Calculate center and radius for the gradient
+    float centerX = (float)width * 0.5f;
+    float centerY = (float)height * 0.5f;
+    float halfWidth = (float)width * 0.5f;
+    float halfHeight = (float)height * 0.5f;
+    float radius = sqrtf(halfWidth * halfWidth + halfHeight * halfHeight) * 1.05f;
+
+    // Ensure blending is disabled for the gradient
+    // to avoid unintended color mixing
+    // with the background clear color.
+    glDisable(GL_BLEND);
+    DrawRadialGradientRing(centerX, centerY, 0.0f, radius, 128,
+        BACKGROUND_GRADIENT_INNER_COLOR, BACKGROUND_GRADIENT_OUTER_COLOR);
 }

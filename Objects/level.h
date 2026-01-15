@@ -110,7 +110,7 @@ typedef struct LevelPacketBuffer {
 	size_t size;
 } LevelPacketBuffer;
 
-// A level contains factions, planets, and starships.
+// A level contains factions, planets, starships, and trail effects for those starships.
 // It also has dimensions (width and height).
 // The level is the main container for the game state.
 // It is used by the game engine to manage the game world.
@@ -127,6 +127,9 @@ typedef struct Level {
 	Starship *starships;
 	size_t starshipCount;
 	size_t starshipCapacity;
+	StarshipTrailEffect *trailEffects;
+	size_t trailEffectCount;
+	size_t trailEffectCapacity;
 
 	float width;
 	float height;

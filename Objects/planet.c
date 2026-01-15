@@ -21,6 +21,19 @@
 
 // Used for drawing unowned planets.
 static const float NEUTRAL_COLOR[4] = {0.6f, 0.6f, 0.6f, 1.0f};
+// The glow alpha values for neutral, claimed, and owned planets.
+// This will control how intense the glow effect is when rendering.
+// Higher alpha means a more pronounced glow.
+static const float NEUTRAL_GLOW_ALPHA = 0.08f;
+static const float CLAIM_GLOW_ALPHA = 0.12f;
+static const float OWNED_GLOW_ALPHA = 0.16f;
+
+// This feathering value controls how soft the edges of the planet ring are.
+// Higher values mean softer edges.
+static const float PLANET_RING_FEATHER = 1.5f;
+
+// Forward declaration of helper function for drawing planet glow.
+static void PlanetDrawGlow(const Planet *planet, float outerRadius);
 
 /**
  * Creates a new planet with the specified position, max fleet capacity, and owner.
@@ -225,7 +238,7 @@ static void DrawClaimProgress(const Planet *planet, float outerRadius) {
 	if (planet->claimant != NULL) {
 		glColor4fv(planet->claimant->color);
 	}
-	DrawFilledCircle(planet->position.x, planet->position.y, radius, 32);
+	DrawFilledCircle(planet->position.x, planet->position.y, radius, 128);
 }
 
 /**
@@ -244,6 +257,9 @@ void PlanetDraw(const Planet *planet) {
 	float outerRadius = PlanetGetOuterRadius(planet);
 	float innerRadius = PlanetGetInnerRadius(planet);
 
+	// We first draw the glow effect for the planet.
+	PlanetDrawGlow(planet, outerRadius);
+
     // Determine if the planet is over capacity.
 	bool overCapacity = planet->currentFleetSize > planet->maxFleetCapacity && planet->owner != NULL;
 
@@ -251,13 +267,22 @@ void PlanetDraw(const Planet *planet) {
     // Otherwise, we skip drawing the ring since it would be fully encompassed by the filled circle
     // drawn for the number of ships present on the planet.
 	if (!overCapacity) {
+		float ringColor[4];
 		if (planet->owner != NULL) {
-			glColor4fv(planet->owner->color);
+			ringColor[0] = planet->owner->color[0];
+			ringColor[1] = planet->owner->color[1];
+			ringColor[2] = planet->owner->color[2];
+			ringColor[3] = planet->owner->color[3];
 		} else {
-			glColor4fv(NEUTRAL_COLOR);
+			ringColor[0] = NEUTRAL_COLOR[0];
+			ringColor[1] = NEUTRAL_COLOR[1];
+			ringColor[2] = NEUTRAL_COLOR[2];
+			ringColor[3] = NEUTRAL_COLOR[3];
 		}
 
-		DrawRing(planet->position.x, planet->position.y, fmaxf(outerRadius - PLANET_RING_THICKNESS, 0.0f), outerRadius, 48);
+		float ringInner = fmaxf(outerRadius - PLANET_RING_THICKNESS, 0.0f);
+		DrawSmoothRing(planet->position.x, planet->position.y, ringInner, outerRadius, 128,
+			PLANET_RING_FEATHER, ringColor);
 	}
 
     // Draw the inner filled circle representing the current fleet size.
@@ -267,12 +292,68 @@ void PlanetDraw(const Planet *planet) {
 		float radius = overCapacity ? outerRadius : innerRadius;
 		if (radius > 0.0f) {
 			glColor4fv(planet->owner->color);
-			DrawFilledCircle(planet->position.x, planet->position.y, radius, 48);
+			DrawFilledCircle(planet->position.x, planet->position.y, radius, 128);
 		}
 	} else if (planet->claimant != NULL) {
         // If unowned but claimed, draw in claimant's color.
 		DrawClaimProgress(planet, outerRadius);
 	}
+}
+
+/**
+ * Draws the glow effect around the planet.
+ * The glow color and intensity depend on whether the planet is owned, claimed, or unowned.
+ * @param planet A pointer to the Planet object.
+ * @param outerRadius The outer radius of the planet.
+ */
+static void PlanetDrawGlow(const Planet *planet, float outerRadius) {
+	// Basic validation of parameters.
+	if (planet == NULL || outerRadius <= 0.0f) {
+		return;
+	}
+
+	// Determine the glow color and alpha based on ownership status.
+	// We first initialize to neutral/default values.
+	const float *sourceColor = NEUTRAL_COLOR;
+	float alpha = NEUTRAL_GLOW_ALPHA;
+
+	// Then we override based on ownership.
+	if (planet->owner != NULL) {
+		sourceColor = planet->owner->color;
+		alpha = OWNED_GLOW_ALPHA;
+	} else if (planet->claimant != NULL) {
+		sourceColor = planet->claimant->color;
+		alpha = CLAIM_GLOW_ALPHA;
+	}
+
+	// And then, we draw the radial gradient ring for the glow effect.
+	float innerColor[4] = {sourceColor[0], sourceColor[1], sourceColor[2], alpha};
+	float outerColor[4] = {sourceColor[0], sourceColor[1], sourceColor[2], 0.0f};
+	float haloInnerRadius = outerRadius;
+	float haloOuterRadius = outerRadius + fmaxf(outerRadius * 0.55f, 28.0f);
+
+	// What glEnable(GL_BLEND) does is enable blending in OpenGL.
+	// Blending is a technique used to combine the color of a source pixel (the pixel being drawn)
+	// with the color of a destination pixel (the pixel already present in the framebuffer)
+	glEnable(GL_BLEND);
+
+	// glBlendFunc specifies how the blending is done.
+	// The parameters GL_SRC_ALPHA and GL_ONE
+	// mean that the source color is multiplied by its alpha value,
+	// and the destination color is multiplied by 1 (i.e., added as-is).
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+	// Finally, we draw the radial gradient ring.
+	DrawRadialGradientRing(planet->position.x, planet->position.y,
+		haloInnerRadius, haloOuterRadius, 64, innerColor, outerColor);
+
+	// After drawing, we reset the blending function back to the standard alpha blending.
+	// This is important to ensure that subsequent drawing operations are not 
+	// affected by our custom blending mode.
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	// We then disable blending to clean up the OpenGL state.
+	glDisable(GL_BLEND);
 }
 
 /**
