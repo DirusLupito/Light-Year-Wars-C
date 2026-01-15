@@ -9,12 +9,106 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "Objects/faction.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
+
+// Packet type identifiers
+// If the first 4 bytes of a packet equal one of these values,
+// it indicates the type of packet being sent or received.
+
+// Type value for a full level packet
+#define LEVEL_PACKET_TYPE_FULL 1u
+
+// Type value for a level snapshot packet
+#define LEVEL_PACKET_TYPE_SNAPSHOT 2u
+
+// Definitions of packet structures used for network transmission.
+// We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
+// This translates to "pack the following structures with 1-byte alignment".
+// This is important for network packets to ensure consistent layout across 
+// different compilers and architectures.
+// And it also ensures the packet sizes are as expected.
+#pragma pack(push, 1)
+
+// A LevelPacketFactionInfo represents the network representation of a faction.
+// It is used to communicate faction information over the network.
+// A faction has an ID and a color (RGBA), so we include these fields here.
+typedef struct LevelPacketFactionInfo {
+	int32_t id;
+	float color[4];
+} LevelPacketFactionInfo;
+
+// A LevelPacketPlanetFullInfo represents the full network representation of a planet.
+// It is used in full level packets to communicate all planet information.
+// A planet has a position, max fleet capacity, current fleet size,
+// an owner faction ID, and a claimant faction ID.
+typedef struct LevelPacketPlanetFullInfo {
+	Vec2 position;
+	float maxFleetCapacity;
+	float currentFleetSize;
+	int32_t ownerId;
+	int32_t claimantId;
+} LevelPacketPlanetFullInfo;
+
+// A LevelPacketPlanetSnapshotInfo represents a snapshot network representation of a planet.
+// It is used in snapshot level packets to communicate partial planet information.
+// The only dynamic fields of a planet are its current fleet size,
+// owner faction ID, and claimant faction ID.
+typedef struct LevelPacketPlanetSnapshotInfo {
+	float currentFleetSize;
+	int32_t ownerId;
+	int32_t claimantId;
+} LevelPacketPlanetSnapshotInfo;
+
+// A LevelPacketStarshipInfo represents the network representation of a starship.
+// It is used to communicate starship information over the network.
+// A starship has a position, velocity, owner faction ID, and target planet index.
+typedef struct LevelPacketStarshipInfo {
+	Vec2 position;
+	Vec2 velocity;
+	int32_t ownerId;
+	int32_t targetPlanetIndex;
+} LevelPacketStarshipInfo;
+
+// A LevelFullPacket represents the header of a full level packet.
+// It contains the type, dimensions, and counts of factions, planets, and starships.
+// This should be followed by arrays of faction info, planet info, and starship info
+// in that order to communicate the full state of the level.
+typedef struct LevelFullPacket {
+	uint32_t type;
+	float width;
+	float height;
+	uint32_t factionCount;
+	uint32_t planetCount;
+	uint32_t starshipCount;
+} LevelFullPacket;
+
+// A LevelSnapshotPacket represents the header of a level snapshot packet.
+// It contains the type and counts of planets and starships.
+// It should be followed by arrays of planet snapshot info and starship info
+// in that order to communicate the dynamic state of the level.
+typedef struct LevelSnapshotPacket {
+	uint32_t type;
+	uint32_t planetCount;
+	uint32_t starshipCount;
+} LevelSnapshotPacket;
+#pragma pack(pop)
+
+// A LevelPacketBuffer holds a pointer to packet data and its size.
+// It is used to manage memory for network packets.
+// The data pointer should be allocated and freed appropriately.
+// This is the abstract representation of a network packet in memory.
+// The other packets defined above are the concrete representations of specific packet types,
+// while this struct is a generic container for any packet data.
+typedef struct LevelPacketBuffer {
+	void *data;
+	size_t size;
+} LevelPacketBuffer;
 
 // A level contains factions, planets, and starships.
 // It also has dimensions (width and height).
@@ -119,5 +213,38 @@ void LevelRemoveStarship(Level *level, size_t index);
  * @param deltaTime The time elapsed since the last update, in seconds.
  */
 void LevelUpdate(Level *level, float deltaTime);
+
+/**
+ * Creates a full level packet buffer for network transmission.
+ * This function allocates memory for the packet buffer and fills it with
+ * the full state of the level, including factions, planets, and starships.
+ * The caller is responsible for releasing the packet buffer using
+ * LevelPacketBufferRelease when done.
+ * @param level A pointer to the Level object.
+ * @param outBuffer A pointer to a LevelPacketBuffer to receive the packet data.
+ * @return true if the packet buffer was created successfully, false otherwise.
+ */
+bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffer);
+
+/**
+ * Creates a level snapshot packet buffer for network transmission.
+ * This function allocates memory for the packet buffer and fills it with
+ * the dynamic state of the level, including planets and starships.
+ * The caller is responsible for releasing the packet buffer using
+ * LevelPacketBufferRelease when done.
+ * @param level A pointer to the Level object.
+ * @param outBuffer A pointer to a LevelPacketBuffer to receive the packet data.
+ * @return true if the packet buffer was created successfully, false otherwise.
+ */
+bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outBuffer);
+
+/**
+ * Releases a level packet buffer created by LevelCreateFullPacketBuffer
+ * or LevelCreateSnapshotPacketBuffer.
+ * This function frees the memory allocated for the packet data
+ * and resets the buffer fields to NULL and zero.
+ * @param buffer A pointer to the LevelPacketBuffer to release.
+ */
+void LevelPacketBufferRelease(LevelPacketBuffer *buffer);
 
 #endif // _LEVEL_H_

@@ -19,12 +19,14 @@
 #include <wingdi.h>
 #include <string.h>
 #include <GL/gl.h>
+#include <limits.h>
 #include "Utilities/gameUtilities.h"
 #include "Utilities/networkUtilities.h"
 #include "Utilities/renderUtilities.h"
 #include "Objects/level.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
+#include "Objects/player.h"
 
 // Macros
 #if RAND_MAX == 32767
@@ -33,6 +35,17 @@
 #define Rand32() rand()
 #endif
 
+// Port number for the server to listen on
 #define SERVER_PORT 6767
+
+// Color of the background (RGBA)
+#define BACKGROUND_COLOR_R 0.3f
+#define BACKGROUND_COLOR_G 0.25f
+#define BACKGROUND_COLOR_B 0.29f
+#define BACKGROUND_COLOR_A 1.0f
+
+// Maximum number of players the server can handle
+// (somewhat arbitrary limit for simplicity, can be easily increased or decreased)
+#define MAX_PLAYERS 16
 
 #endif // _SERVER_H_

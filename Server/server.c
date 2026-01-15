@@ -28,10 +28,29 @@ static GLuint font_display_list_base = 0;
 static int window_width = 0;
 static int window_height = 0;
 
+// The main game level representing the ongoing game state.
 static Level level;
+
+// Currently selected planet for sending fleets.
 static Planet *selected_planet = NULL;
 
+// Array of players connected to the server.
+static Player players[MAX_PLAYERS];
+
+// Current number of connected players.
+static size_t playerCount = 0;
+
+// Accumulator for snapshot timing.
+// Used to track time elapsed since last snapshot broadcast.
+static float snapshotAccumulator = 0.0f;
+
 // Forward declarations of static functions
+static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
+static const Faction *FindAvailableFaction(void);
+static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
+static bool SendFullPacketToPlayer(Player *player, SOCKET sock);
+static void BroadcastSnapshots(SOCKET sock);
+static void SendPacketToPlayer(Player *player, SOCKET sock, const LevelPacketBuffer *packet);
 static bool InitializeOpenGL(HWND window_handle);
 static void ShutdownOpenGL(HWND window_handle);
 static void UpdateProjection(int width, int height);
@@ -124,6 +143,244 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 }
 
 /**
+ * Finds a player by their network address.
+ * @param address A pointer to the SOCKADDR_IN structure representing the player's address.
+ * @return A pointer to the Player if found, NULL otherwise.
+ */
+static Player *FindPlayerByAddress(const SOCKADDR_IN *address) {
+    // Basic validation of input pointer.
+    if (address == NULL) {
+        return NULL;
+    }
+
+    // Search through the connected players for a matching address.
+    for (size_t i = 0; i < playerCount; ++i) {
+        if (PlayerMatchesAddress(&players[i], address)) {
+            return &players[i];
+        }
+    }
+
+    // No matching player found.
+    return NULL;
+}
+
+/**
+ * Finds an available faction that is not currently assigned to any player.
+ * @return A pointer to the available Faction, or NULL if none are available.
+ */
+static const Faction *FindAvailableFaction(void) {
+    // If there are no factions, something pretty odd is happening.
+    // Return NULL to indicate failure.
+    if (level.factions == NULL) {
+        return NULL;
+    }
+
+    // Search through the factions to find one not in use by any player.
+    for (size_t i = 0; i < level.factionCount; ++i) {
+        const Faction *candidate = &level.factions[i];
+        bool inUse = false;
+
+        // Inefficient, but with such a small number of players and factions,
+        // this is acceptable for simplicity.
+
+        // We search through all connected players
+        // to see if any of them are using this faction.
+        for (size_t j = 0; j < playerCount; ++j) {
+            if (players[j].faction == candidate) {
+                inUse = true;
+                break;
+            }
+        }
+        if (!inUse) {
+            return candidate;
+        }
+    }
+
+    // All factions are in use.
+    return NULL;
+}
+
+/**
+ * Ensures that a player exists for the given address.
+ * If a player already exists for the address, updates their endpoint and marks them as awaiting a full packet.
+ * If no player exists, creates a new player with an available faction.
+ * @param address A pointer to the SOCKADDR_IN structure representing the player's address.
+ * @return A pointer to the Player if successful, NULL otherwise.
+ */
+static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
+    // Basic validation of input pointer.
+    if (address == NULL) {
+        return NULL;
+    }
+
+    // Check if a player already exists for this address.
+    Player *existing = FindPlayerByAddress(address);
+    if (existing != NULL) {
+        // If somehow a player already exists for this address,
+        // we just update their endpoint and mark them as awaiting a full packet.
+        PlayerUpdateEndpoint(existing, address);
+        existing->awaitingFullPacket = true;
+        return existing;
+    }
+
+    // If there are already maximum players connected, we cannot add a new one.
+    if (playerCount >= MAX_PLAYERS) {
+        return NULL;
+    }
+
+    // Find an available faction for the new player.
+    const Faction *faction = FindAvailableFaction();
+    if (faction == NULL) {
+        return NULL;
+    }
+
+    // Create and initialize the new player
+    // using the found faction and provided address.
+    Player *player = &players[playerCount++];
+    PlayerInit(player, faction, address);
+
+    // Log the new player registration
+    // and report their assigned faction
+    // and IP address.
+    char ipBuffer[INET_ADDRSTRLEN] = {0};
+    if (InetNtopA(AF_INET, (void *)&address->sin_addr, ipBuffer, sizeof(ipBuffer)) == NULL) {
+        snprintf(ipBuffer, sizeof(ipBuffer), "unknown");
+    }
+    printf("Registered player for %s assigned faction %d\n", ipBuffer, faction->id);
+
+    return player;
+}
+
+/**
+ * Sends a packet to the specified player.
+ * @param player A pointer to the Player to send the packet to.
+ * @param sock The socket to use for sending the packet.
+ * @param packet A pointer to the LevelPacketBuffer containing the packet data.
+ */
+static void SendPacketToPlayer(Player *player, SOCKET sock, const LevelPacketBuffer *packet) {
+    // Basic validation of input pointers.
+    if (player == NULL || packet == NULL || packet->data == NULL) {
+        return;
+    }
+
+    // Ensure the packet size does not exceed INT_MAX
+    // as sendto expects an int for the size parameter.
+    if (packet->size > (size_t)INT_MAX) {
+        printf("Packet too large to send (size=%zu).\n", packet->size);
+        return;
+    }
+
+    // Actually send the packet using sendto.
+    // Argments:
+    // sock - the socket to send on
+    // (const char *)packet->data - pointer to the data to send
+    // (int)packet->size - size of the data to send
+    // 0 - flags (none)
+    // (SOCKADDR *)&player->address - pointer to the destination address
+    // (int)sizeof(player->address) - size of the destination address
+    int result = sendto(sock,
+        (const char *)packet->data,
+        (int)packet->size,
+        0,
+        (SOCKADDR *)&player->address,
+        (int)sizeof(player->address));
+
+    // Check for and report any error
+    if (result == SOCKET_ERROR) {
+        printf("sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Sends a full level packet to the specified player.
+ * @param player A pointer to the Player to send the packet to.
+ * @param sock The socket to use for sending the packet.
+ * @return true if the packet was sent successfully, false otherwise.
+ */
+static bool SendFullPacketToPlayer(Player *player, SOCKET sock) {
+    // Basic validation of input pointer.
+    if (player == NULL) {
+        return false;
+    }
+
+    // Create the full level packet buffer.
+    LevelPacketBuffer packet;
+    if (!LevelCreateFullPacketBuffer(&level, &packet)) {
+        printf("Failed to build full level packet.\n");
+        return false;
+    }
+
+    // Send the packet to the player.
+    bool success = false;
+    if (packet.size <= (size_t)INT_MAX) {
+        // Actually send the packet using sendto.
+        // Argments:
+        // sock - the socket to send on
+        // (const char *)packet.data - pointer to the data to send
+        // (int)packet.size - size of the data to send
+        // 0 - flags (none)
+        // (SOCKADDR *)&player->address - pointer to the destination address
+        // (int)sizeof(player->address) - size of the destination address
+        int result = sendto(sock,
+            (const char *)packet.data,
+            (int)packet.size,
+            0,
+            (SOCKADDR *)&player->address,
+            (int)sizeof(player->address));
+
+        // Check for and report any error
+        if (result != SOCKET_ERROR) {
+            success = true;
+
+            // This player now knows the full level state,
+            // so they only need snapshots going forward.
+            player->awaitingFullPacket = false;
+        } else {
+            printf("sendto failed: %d\n", WSAGetLastError());
+        }
+    } else {
+        // In case the packet is too large to send,
+        // we report an error for clarity.
+        printf("Full packet too large to send (size=%zu).\n", packet.size);
+    }
+
+    // Since we've sent the packet (or failed to),
+    // we can release the packet buffer now.
+    LevelPacketBufferRelease(&packet);
+    return success;
+}
+
+/**
+ * Broadcasts level snapshot packets to all connected players.
+ * @param sock The socket to use for sending the packets.
+ */
+static void BroadcastSnapshots(SOCKET sock) {
+    // No point in continuing if there are no players.
+    if (playerCount == 0) {
+        return;
+    }
+
+    // Create the snapshot packet buffer.
+    LevelPacketBuffer packet;
+    if (!LevelCreateSnapshotPacketBuffer(&level, &packet)) {
+        printf("Failed to build snapshot packet.\n");
+        return;
+    }
+
+    // Send the same data to all players 
+    // to save on memory and processing,
+    // and to ensure all players have more or
+    // less consistent data.
+    for (size_t i = 0; i < playerCount; ++i) {
+        SendPacketToPlayer(&players[i], sock, &packet);
+    }
+
+    // Since we've sent the packet to all players,
+    // we can release the packet buffer now.
+    LevelPacketBufferRelease(&packet);
+}
+
+/**
  * Starting point for the program.
  * @param hInstance Handle to the current instance of the program.
  * @param hPrevInstance Handle to the previous instance of the program.
@@ -204,11 +461,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         return EXIT_FAILURE;
     }
 
-    float opacity = 1.0f;
     printf("Starting UDP listener on port %d...\n", SERVER_PORT);
 
-    // We set up a UDP socket to listen for messages from some other computer.
-    // We will then respond to it with "Ok", then change the screen color from red to blue or vice versa.
+    // We set up a UDP socket to listen for messages from clients.
+    // UDP is used to allow for low-latency communication,
+    // which is important for real-time applications like games.
 
     // WinSock initialization
     if (!InitializeWinsock()) {
@@ -299,41 +556,44 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                                       (SOCKADDR*)&sender_address, &sender_address_size);
 
         // If data was received successfully (bytes_received is not SOCKET_ERROR)
-        // then we process the message and respond with "Ok"
+        // then we process the received data.
         if (bytes_received != SOCKET_ERROR) {
 
             // Null-terminate the received data to make it a valid string
             recv_buffer[bytes_received] = '\0';
+            bool isJoinRequest = bytes_received >= 4 && strncmp(recv_buffer, "JOIN", 4) == 0;
 
-            // Print the received message (for debugging purposes)
-            printf("Received message: %s\n", recv_buffer);
-
-            // If we received a message, we respond with "Ok"
-            const char* response_message = "Ok";
-
-            // Send the response back to the sender
-            // sendto takes the following arguments here:
-            // 1. The socket to send data on. In this case, our UDP socket
-
-            // 2. A buffer containing the data to send. Here, we use response_message.
-
-            // 3. The length of the data to send. Here, we use strlen(response_message).
-
-            // 4. Flags to modify the behavior of sendto. Here, we use 0 for no special behavior.
-
-            // 5. A pointer to a sockaddr structure containing the recipient's address.
-            //    We cast our SOCKADDR_IN pointer to a SOCKADDR pointer.
-
-            // 6. The size of the recipient address structure.
-            int bytes_sent = sendto(sock, response_message, (int)strlen(response_message), 0,
-                                    (SOCKADDR*)&sender_address, sender_address_size);
-
-            // In case of an error (determined by bytes_sent being SOCKET_ERROR), we print the error
-            if (bytes_sent == SOCKET_ERROR) {
-                printf("sendto failed: %d\n", WSAGetLastError());
+            // Handle join requests
+            if (isJoinRequest) {
+                // Ensure a player exists for the sender's address
+                // and send them the full level packet.
+                // This will also check if the server is full
+                // and return NULL if no more players can be accepted.
+                Player *player = EnsurePlayerForAddress(&sender_address);
+                if (player != NULL) {
+                    SendFullPacketToPlayer(player, sock);
+                } else {
+                    // If there is no available faction or the server is full,
+                    // we send a SERVER_FULL message back to the client.
+                    const char *fullMessage = "SERVER_FULL";
+                    int sent = sendto(sock,
+                        fullMessage,
+                        (int)strlen(fullMessage),
+                        0,
+                        (SOCKADDR *)&sender_address,
+                        sender_address_size);
+                    
+                    // Check for and report any error
+                    if (sent == SOCKET_ERROR) {
+                        printf("sendto failed: %d\n", WSAGetLastError());
+                    }
+                }
             }
-            // Reset opacity to make the window fully blue
-            opacity = 1.0f;
+        } else {
+            int error = WSAGetLastError();
+            if (error != WSAEWOULDBLOCK) {
+                printf("recvfrom failed: %d\n", error);
+            }
         }
 
         // Calculate delta time
@@ -344,12 +604,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         // Update the level state
         LevelUpdate(&level, delta_time);
 
-        // Decrease opacity over time
-        opacity -= 0.5f * delta_time;
-
-        // Clamp opacity to [0.0, 1.0]
-        if (opacity < 0.0f) {
-            opacity = 0.0f;
+        // Keep track of time for snapshot broadcasting
+        // Snapshots shall be broadcasted at 1 Hz
+        snapshotAccumulator += delta_time;
+        while (snapshotAccumulator >= 1.0f) {
+            BroadcastSnapshots(sock);
+            snapshotAccumulator -= 1.0f;
         }
 
         // Calculate frames per second (FPS)
@@ -362,12 +622,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         }
 
         if (window_device_context && window_render_context) {
-            float background_red = 1.0f - opacity;
-            float background_blue = opacity;
-            glClearColor(background_red, 0.0f, background_blue, 1.0f);
+            // Sets the clear color for the window (background color)
+            glClearColor(BACKGROUND_COLOR_R, BACKGROUND_COLOR_G, BACKGROUND_COLOR_B, BACKGROUND_COLOR_A);
+
+            // Clear the color buffer to the clear color
             glClear(GL_COLOR_BUFFER_BIT);
 
+            // Reset the modelview matrix
             glMatrixMode(GL_MODELVIEW);
+
+            // Load the identity matrix to reset any previous transformations
             glLoadIdentity();
 
             if (window_width > 0 && window_height > 0) {
@@ -386,14 +650,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 }
             }
 
+            // Display FPS in the top-left corner
             if (font_display_list_base && window_width >= 10 && window_height >= 10) {
                 char fps_string[32];
                 snprintf(fps_string, sizeof(fps_string), "FPS: %.0f", fps);
+
+                // Text color is white
                 glColor3f(1.0f, 1.0f, 1.0f);
+
+                // Text position is 10 pixels from the left and 20 pixels from the top
                 glRasterPos2f(10.0f, 20.0f);
+
+                // Render the FPS string using the font display lists
                 glPushAttrib(GL_LIST_BIT);
+
+                // Set the base display list for character rendering
+                // This is done by subtracting 32 from font_display_list_base
+                // because our display lists start at ASCII character 32 (space character).
                 glListBase(font_display_list_base - 32);
+
+                // Call the display lists for each character in the fps_string
+                // This renders the string to the screen.
                 glCallLists((GLsizei)strlen(fps_string), GL_UNSIGNED_BYTE, fps_string);
+
+                // Restore the previous display list state
                 glPopAttrib();
             }
 
@@ -402,6 +682,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     }
 
     // At this point in the code, we are exiting the main loop and need to clean up resources.
+    closesocket(sock);
+    WSACleanup();
     LevelRelease(&level);
     ShutdownOpenGL(window_handle);
     return EXIT_SUCCESS;

@@ -319,3 +319,248 @@ void LevelUpdate(Level *level, float deltaTime) {
 		++i;
 	}
 }
+
+/**
+ * Converts a faction pointer into its ID for network transmission.
+ * If the faction pointer is NULL, returns -1.
+ * @param faction A pointer to the Faction object.
+ * @return The ID of the faction, or -1 if the faction is NULL.
+ */
+static int32_t ResolveFactionId(const Faction *faction) {
+	return (faction != NULL) ? (int32_t)faction->id : -1;
+}
+
+/**
+ * Converts a planet pointer into its index in the 
+ * level's planet array for network transmission.
+ * We return -1 if the planet pointer is NULL,
+ * or if the planet does not belong to the given level.
+ * This function assumes that the level and its planet array are valid.
+ * @param level A pointer to the Level object.
+ * @param planet A pointer to the Planet object.
+ * @return The index of the planet in the level's planet array, or -1 if not found.
+ */
+static int32_t ResolvePlanetIndex(const Level *level, const Planet *planet) {
+	// Basic validation of input pointers.
+	if (level == NULL || planet == NULL || level->planets == NULL) {
+		return -1;
+	}
+
+	// We assume that planets are stored in a contiguous array,
+	// so we can calculate the index by pointer arithmetic.
+	ptrdiff_t index = planet - level->planets;
+	if (index < 0 || (size_t)index >= level->planetCount) {
+		return -1;
+	}
+
+	return (int32_t)index;
+}
+
+/**
+ * Creates a full level packet buffer for network transmission.
+ * This function allocates memory for the packet buffer and fills it with
+ * the full state of the level, including factions, planets, and starships.
+ * The caller is responsible for releasing the packet buffer using
+ * LevelPacketBufferRelease when done.
+ * @param level A pointer to the Level object.
+ * @param outBuffer A pointer to a LevelPacketBuffer to receive the packet data.
+ * @return true if the packet buffer was created successfully, false otherwise.
+ */
+bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffer) {
+	// Basic validation of input pointers.
+	if (outBuffer == NULL) {
+		return false;
+	}
+
+	// The outBuffer better start empty and free'd 
+	// as otherwise this line will leak memory.
+	outBuffer->data = NULL;
+	outBuffer->size = 0u;
+
+	// No point in continuing if level is NULL.
+	if (level == NULL) {
+		return false;
+	}
+
+	// We need to know how many factions, planets, and starships we have
+	size_t factionCount = level->factionCount;
+	size_t planetCount = level->planetCount;
+	size_t starshipCount = level->starshipCount;
+
+	// If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
+	// so we fail early.
+	if (factionCount > UINT32_MAX || planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
+		return false;
+	}
+
+	// Now we can calculate the total size of the packet buffer we need to allocate.
+	// It's a simple sum of the sizes of the header and all the arrays,
+	// with each array itself simply being the count of elements times the size of each element.
+	size_t totalSize = sizeof(LevelFullPacket)
+		+ factionCount * sizeof(LevelPacketFactionInfo)
+		+ planetCount * sizeof(LevelPacketPlanetFullInfo)
+		+ starshipCount * sizeof(LevelPacketStarshipInfo);
+
+	// This will be the buffer that holds all our packet data.
+	uint8_t *buffer = (uint8_t *)malloc(totalSize);
+	if (buffer == NULL) {
+		return false;
+	}
+
+	// Now that we have the buffer allocated, we can start filling it in.
+	// We start with the header.
+	LevelFullPacket *header = (LevelFullPacket *)buffer;
+	header->type = LEVEL_PACKET_TYPE_FULL;
+	header->width = level->width;
+	header->height = level->height;
+	header->factionCount = (uint32_t)factionCount;
+	header->planetCount = (uint32_t)planetCount;
+	header->starshipCount = (uint32_t)starshipCount;
+
+	// Then we fill in the faction info array.
+	// We use a cursor to keep track of where we are in the buffer.
+	uint8_t *cursor = buffer + sizeof(LevelFullPacket);
+	LevelPacketFactionInfo *factionInfo = (LevelPacketFactionInfo *)cursor;
+	for (size_t i = 0; i < factionCount; ++i) {
+		factionInfo[i].id = (int32_t)level->factions[i].id;
+		for (size_t c = 0; c < 4; ++c) {
+			factionInfo[i].color[c] = level->factions[i].color[c];
+		}
+	}
+
+	// Now we advance the cursor past the faction info array
+	// and fill in the planet info array.
+	cursor += factionCount * sizeof(LevelPacketFactionInfo);
+	LevelPacketPlanetFullInfo *planetInfo = (LevelPacketPlanetFullInfo *)cursor;
+	for (size_t i = 0; i < planetCount; ++i) {
+		const Planet *planet = &level->planets[i];
+		planetInfo[i].position = planet->position;
+		planetInfo[i].maxFleetCapacity = planet->maxFleetCapacity;
+		planetInfo[i].currentFleetSize = planet->currentFleetSize;
+		planetInfo[i].ownerId = ResolveFactionId(planet->owner);
+		planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
+	}
+
+	// Finally, we advance the cursor past the planet info array
+	// and fill in the starship info array.
+	cursor += planetCount * sizeof(LevelPacketPlanetFullInfo);
+	LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
+	for (size_t i = 0; i < starshipCount; ++i) {
+		const Starship *ship = &level->starships[i];
+		starshipInfo[i].position = ship->position;
+		starshipInfo[i].velocity = ship->velocity;
+		starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
+		starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
+	}
+
+	// We've filled in the entire buffer now,
+	// so we can set the outBuffer fields and return success.
+	outBuffer->data = buffer;
+	outBuffer->size = totalSize;
+	return true;
+}
+
+/**
+ * Creates a level snapshot packet buffer for network transmission.
+ * This function allocates memory for the packet buffer and fills it with
+ * the dynamic state of the level, including planets and starships.
+ * The caller is responsible for releasing the packet buffer using
+ * LevelPacketBufferRelease when done.
+ * @param level A pointer to the Level object.
+ * @param outBuffer A pointer to a LevelPacketBuffer to receive the packet data.
+ * @return true if the packet buffer was created successfully, false otherwise.
+ */
+bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outBuffer) {
+	// Basic validation of input pointers.
+	if (outBuffer == NULL) {
+		return false;
+	}
+
+	// The outBuffer better start empty and free'd 
+	// as otherwise this line will leak memory.
+	outBuffer->data = NULL;
+	outBuffer->size = 0u;
+
+	// No point in continuing if level is NULL.
+	if (level == NULL) {
+		return false;
+	}
+
+	// We need to know how many planets and starships we have
+	size_t planetCount = level->planetCount;
+	size_t starshipCount = level->starshipCount;
+
+	// If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
+	if (planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
+		return false;
+	}
+
+	// Now we can calculate the total size of the packet buffer we need to allocate.
+	// It's a simple sum of the sizes of the header and all the arrays,
+	// with each array itself simply being the count of elements times the size of each element.
+	size_t totalSize = sizeof(LevelSnapshotPacket)
+		+ planetCount * sizeof(LevelPacketPlanetSnapshotInfo)
+		+ starshipCount * sizeof(LevelPacketStarshipInfo);
+
+	// This will be the buffer that holds all our packet data.
+	uint8_t *buffer = (uint8_t *)malloc(totalSize);
+	if (buffer == NULL) {
+		return false;
+	}
+
+	// Now that we have the buffer allocated, we can start filling it in.
+	// We start with the header.
+	LevelSnapshotPacket *header = (LevelSnapshotPacket *)buffer;
+	header->type = LEVEL_PACKET_TYPE_SNAPSHOT;
+	header->planetCount = (uint32_t)planetCount;
+	header->starshipCount = (uint32_t)starshipCount;
+
+	// Then we fill in the planet snapshot info array.
+	uint8_t *cursor = buffer + sizeof(LevelSnapshotPacket);
+	LevelPacketPlanetSnapshotInfo *planetInfo = (LevelPacketPlanetSnapshotInfo *)cursor;
+	for (size_t i = 0; i < planetCount; ++i) {
+		const Planet *planet = &level->planets[i];
+		planetInfo[i].currentFleetSize = planet->currentFleetSize;
+		planetInfo[i].ownerId = ResolveFactionId(planet->owner);
+		planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
+	}
+
+	// Finally, we advance the cursor past the planet info array
+	// and fill in the starship info array.
+	cursor += planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
+	LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
+	for (size_t i = 0; i < starshipCount; ++i) {
+		const Starship *ship = &level->starships[i];
+		starshipInfo[i].position = ship->position;
+		starshipInfo[i].velocity = ship->velocity;
+		starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
+		starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
+	}
+
+	// We've filled in the entire buffer now,
+	// so we can set the outBuffer fields and return success.
+	outBuffer->data = buffer;
+	outBuffer->size = totalSize;
+	return true;
+}
+
+/**
+ * Releases a level packet buffer created by LevelCreateFullPacketBuffer
+ * or LevelCreateSnapshotPacketBuffer.
+ * This function frees the memory allocated for the packet data
+ * and resets the buffer fields to NULL and zero.
+ * @param buffer A pointer to the LevelPacketBuffer to release.
+ */
+void LevelPacketBufferRelease(LevelPacketBuffer *buffer) {
+	// Basic validation of input pointer.
+	if (buffer == NULL) {
+		return;
+	}
+
+	// Free the packet data and reset the buffer fields.
+	// Buffer better not have been already released,
+	// as otherwise this line will double-free memory.
+	free(buffer->data);
+	buffer->data = NULL;
+	buffer->size = 0u;
+}
