@@ -28,6 +28,9 @@ static GLuint font_display_list_base = 0;
 static int window_width = 0;
 static int window_height = 0;
 
+static Level level;
+static Planet *selected_planet = NULL;
+
 // Forward declarations of static functions
 static bool InitializeOpenGL(HWND window_handle);
 static void ShutdownOpenGL(HWND window_handle);
@@ -79,6 +82,37 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // If we don't do this, the aspect ratio will be incorrect
             // and the rendered scene will appear stretched or squashed.
             UpdateProjection(window_width, window_height);
+            return 0;
+        }
+        case WM_LBUTTONDOWN: {
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            Vec2 mousePos = {(float)x, (float)y};
+
+            Planet *clicked = NULL;
+            for (size_t i = 0; i < level.planetCount; ++i) {
+                Vec2 diff = Vec2Subtract(mousePos, level.planets[i].position);
+                float dist = Vec2Length(diff);
+                if (dist < PlanetGetOuterRadius(&level.planets[i])) {
+                    clicked = &level.planets[i];
+                    break;
+                }
+            }
+
+            if (clicked) {
+                if (selected_planet && selected_planet != clicked) {
+                    PlanetSendFleet(selected_planet, clicked, &level);
+                    selected_planet = NULL;
+                } else if (clicked->owner != NULL) {
+                    if (selected_planet == clicked) {
+                        selected_planet = NULL;
+                    } else {
+                        selected_planet = clicked;
+                    }
+                }
+            } else {
+                selected_planet = NULL;
+            }
             return 0;
         }
         default: {
@@ -212,6 +246,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     int64_t previous_ticks = GetTicks();
     int64_t frequency = GetTickFrequency();
 
+    printf("Generating a random level...\n");
+    LevelInit(&level);
+    float level_width = (float)window_width > 0 ? (float)window_width : 800.0f;
+    float level_height = (float)window_height > 0 ? (float)window_height : 600.0f;
+    GenerateRandomLevel(&level, 4, 2, 5.0f, 15.0f, level_width, level_height, 0);
+
     printf("Entering main program loop...\n");
 
     //Main program loop.
@@ -301,6 +341,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         float delta_time = (float)(current_ticks - previous_ticks) / (float)frequency;
         previous_ticks = current_ticks;
 
+        // Update the level state
+        LevelUpdate(&level, delta_time);
+
         // Decrease opacity over time
         opacity -= 0.5f * delta_time;
 
@@ -328,12 +371,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             glLoadIdentity();
 
             if (window_width > 0 && window_height > 0) {
-                glColor3f(1.0f, 1.0f, 1.0f);
-                DrawCircle((float)window_width * 0.5f,
-                            (float)window_height * 0.5f,
-                            50.0f,
-                            128,
-                            2.0f);
+                 for (size_t i = 0; i < level.planetCount; ++i) {
+                    PlanetDraw(&level.planets[i]);
+                }
+
+                for (size_t i = 0; i < level.starshipCount; ++i) {
+                if (selected_planet != NULL) {
+                    float radius = PlanetGetOuterRadius(selected_planet);
+                    glColor3f(1.0f, 1.0f, 1.0f);
+                    DrawRing(selected_planet->position.x, selected_planet->position.y, radius + 2.0f, radius + 5.0f, 32);
+                }
+
+                    StarshipDraw(&level.starships[i]);
+                }
             }
 
             if (font_display_list_base && window_width >= 10 && window_height >= 10) {
@@ -352,6 +402,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     }
 
     // At this point in the code, we are exiting the main loop and need to clean up resources.
+    LevelRelease(&level);
     ShutdownOpenGL(window_handle);
     return EXIT_SUCCESS;
 }

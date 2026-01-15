@@ -22,6 +22,9 @@
 #include "Utilities/gameUtilities.h"
 #include "Utilities/networkUtilities.h"
 #include "Utilities/renderUtilities.h"
+#include "Objects/level.h"
+#include "Objects/planet.h"
+#include "Objects/starship.h"
 
 // Macros
 #if RAND_MAX == 32767
