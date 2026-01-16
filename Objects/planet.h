@@ -49,11 +49,11 @@ struct Starship;
 // Should the claimant succeed in sending enough ships such that currentFleetSize meets or exceeds maxFleetCapacity,
 // the planet becomes owned by the claimant faction.
 typedef struct Planet {
-	Vec2 position;
-	float maxFleetCapacity;
-	float currentFleetSize;
-	const Faction *owner;
-	const Faction *claimant;
+    Vec2 position;
+    float maxFleetCapacity;
+    float currentFleetSize;
+    const Faction *owner;
+    const Faction *claimant;
 } Planet;
 
 /**

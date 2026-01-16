@@ -28,9 +28,10 @@ static const float NEUTRAL_GLOW_ALPHA = 0.08f;
 static const float CLAIM_GLOW_ALPHA = 0.12f;
 static const float OWNED_GLOW_ALPHA = 0.16f;
 
-// This feathering value controls how soft the edges of the planet ring are.
+// The feathering values controls how soft the edges of the planet ring and disc/inner circle are.
 // Higher values mean softer edges.
 static const float PLANET_RING_FEATHER = 1.5f;
+static const float PLANET_DISC_FEATHER = 1.2f;
 
 // Forward declaration of helper function for drawing planet glow.
 static void PlanetDrawGlow(const Planet *planet, float outerRadius);
@@ -46,19 +47,19 @@ static void PlanetDrawGlow(const Planet *planet, float outerRadius);
  */
 Planet CreatePlanet(Vec2 position, float maxFleetCapacity, const Faction *owner) {
     // We first make a Planet struct
-	Planet planet;
+    Planet planet;
 
     // Then we set its members based on the provided parameters
     // and sensible defaults.
     // A planet is a sufficiently simple object
     // that it does not require any special handling during creation.
     // No dynamic memory allocation is necessary here.
-	planet.position = position;
-	planet.maxFleetCapacity = fmaxf(maxFleetCapacity, 0.0f);
-	planet.currentFleetSize = 0.0f;
-	planet.owner = owner;
-	planet.claimant = NULL;
-	return planet;
+    planet.position = position;
+    planet.maxFleetCapacity = fmaxf(maxFleetCapacity, 0.0f);
+    planet.currentFleetSize = 0.0f;
+    planet.owner = owner;
+    planet.claimant = NULL;
+    return planet;
 }
 
 /**
@@ -69,9 +70,9 @@ Planet CreatePlanet(Vec2 position, float maxFleetCapacity, const Faction *owner)
  * @param deltaTime The time elapsed since the last update, in seconds.
  */
 void PlanetUpdate(Planet *planet, float deltaTime) {
-	if (planet == NULL) {
-		return;
-	}
+    if (planet == NULL) {
+        return;
+    }
 
     // Planets have different behaviors based on their ownership status.
 
@@ -81,43 +82,43 @@ void PlanetUpdate(Planet *planet, float deltaTime) {
     // 3. Owned planets adjust their fleet size towards max capacity at a fixed rate.
 
     // Handle unowned planets first.
-	if (planet->owner == NULL) {
-		if (planet->claimant == NULL) {
+    if (planet->owner == NULL) {
+        if (planet->claimant == NULL) {
             // No owner and no claimant means no change.
-			planet->currentFleetSize = 0.0f;
-		} else {
+            planet->currentFleetSize = 0.0f;
+        } else {
             // No owner but has a claimant means we clamp the fleet size.
-			if (planet->currentFleetSize < 0.0f) {
-				planet->currentFleetSize = 0.0f;
-			}
-			if (planet->currentFleetSize > planet->maxFleetCapacity) {
-				planet->currentFleetSize = planet->maxFleetCapacity;
-			}
-		}
-		return;
-	}
+            if (planet->currentFleetSize < 0.0f) {
+                planet->currentFleetSize = 0.0f;
+            }
+            if (planet->currentFleetSize > planet->maxFleetCapacity) {
+                planet->currentFleetSize = planet->maxFleetCapacity;
+            }
+        }
+        return;
+    }
 
     // At this point, we know the planet is owned.
     // So we adjust the fleet size towards max capacity.
-	float target = planet->maxFleetCapacity;
-	if (planet->currentFleetSize > target) {
+    float target = planet->maxFleetCapacity;
+    if (planet->currentFleetSize > target) {
         // Reduce fleet size towards target.
-		planet->currentFleetSize -= PLANET_FLEET_ADJUST_RATE * deltaTime;
-		if (planet->currentFleetSize < target) {
-			planet->currentFleetSize = target;
-		}
-	} else if (planet->currentFleetSize < target) {
+        planet->currentFleetSize -= PLANET_FLEET_ADJUST_RATE * deltaTime;
+        if (planet->currentFleetSize < target) {
+            planet->currentFleetSize = target;
+        }
+    } else if (planet->currentFleetSize < target) {
         // Increase fleet size towards target.
-		planet->currentFleetSize += PLANET_FLEET_ADJUST_RATE * deltaTime;
-		if (planet->currentFleetSize > target) {
-			planet->currentFleetSize = target;
-		}
-	}
+        planet->currentFleetSize += PLANET_FLEET_ADJUST_RATE * deltaTime;
+        if (planet->currentFleetSize > target) {
+            planet->currentFleetSize = target;
+        }
+    }
 
     // Ensure fleet size does not go negative.
-	if (planet->currentFleetSize < 0.0f) {
-		planet->currentFleetSize = 0.0f;
-	}
+    if (planet->currentFleetSize < 0.0f) {
+        planet->currentFleetSize = 0.0f;
+    }
 }
 
 /**
@@ -132,22 +133,22 @@ static float ClampFleetSize(const Planet *planet, float fleetSize) {
     // Should not be possible if used correctly.
 
     // If the planet has no max capacity, return 0.0f.
-	if (planet->maxFleetCapacity <= 0.0f) {
-		return 0.0f;
-	}
+    if (planet->maxFleetCapacity <= 0.0f) {
+        return 0.0f;
+    }
 
     // Otherwise, clamp the fleet size between 0 and max capacity.
-	float clamped = fleetSize;
-	if (clamped < 0.0f) {
-		clamped = 0.0f;
-	}
+    float clamped = fleetSize;
+    if (clamped < 0.0f) {
+        clamped = 0.0f;
+    }
 
-	float cap = planet->maxFleetCapacity;
-	if (clamped > cap) {
-		clamped = cap;
-	}
+    float cap = planet->maxFleetCapacity;
+    if (clamped > cap) {
+        clamped = cap;
+    }
 
-	return clamped;
+    return clamped;
 }
 
 /**
@@ -158,15 +159,15 @@ static float ClampFleetSize(const Planet *planet, float fleetSize) {
  * @return The outer radius of the planet.
  */
 float PlanetGetOuterRadius(const Planet *planet) {
-	if (planet == NULL) {
-		return 0.0f;
-	}
+    if (planet == NULL) {
+        return 0.0f;
+    }
 
     // Calculate the outer radius based on max fleet capacity.
-	float base = planet->maxFleetCapacity * PLANET_RADIUS_SCALE;
+    float base = planet->maxFleetCapacity * PLANET_RADIUS_SCALE;
 
     // Minimum outer radius is 12.0f.
-	return fmaxf(base, 12.0f);
+    return fmaxf(base, 12.0f);
 }
 
 /**
@@ -178,20 +179,20 @@ float PlanetGetOuterRadius(const Planet *planet) {
  * @return The inner radius of the planet.
  */
 float PlanetGetInnerRadius(const Planet *planet) {
-	if (planet == NULL || planet->maxFleetCapacity <= 0.0f) {
-		return 0.0f;
-	}
+    if (planet == NULL || planet->maxFleetCapacity <= 0.0f) {
+        return 0.0f;
+    }
 
     // The inner radius is based on the current fleet size ratio.
     // The specific formula ensures it stays within the ring thickness.
     // It is given by:
     // innerRadius = (outerRadius - PLANET_RING_THICKNESS) * (clampedFleetSize / maxFleetCapacity)
-	float outerRadius = PlanetGetOuterRadius(planet);
-	float innerLimit = outerRadius - PLANET_RING_THICKNESS;
-	float ratio = ClampFleetSize(planet, planet->currentFleetSize) / planet->maxFleetCapacity;
+    float outerRadius = PlanetGetOuterRadius(planet);
+    float innerLimit = outerRadius - PLANET_RING_THICKNESS;
+    float ratio = ClampFleetSize(planet, planet->currentFleetSize) / planet->maxFleetCapacity;
 
     // Ensure we do not return a negative inner radius.
-	return fmaxf(innerLimit * ratio, 0.0f);
+    return fmaxf(innerLimit * ratio, 0.0f);
 }
 
 /**
@@ -202,13 +203,13 @@ float PlanetGetInnerRadius(const Planet *planet) {
  * @return The collision radius of the planet.
  */
 float PlanetGetCollisionRadius(const Planet *planet) {
-	if (planet == NULL) {
-		return 0.0f;
-	}
+    if (planet == NULL) {
+        return 0.0f;
+    }
 
-	float outerRadius = PlanetGetOuterRadius(planet);
-	float innerRadius = PlanetGetInnerRadius(planet);
-	return fmaxf(outerRadius, innerRadius);
+    float outerRadius = PlanetGetOuterRadius(planet);
+    float innerRadius = PlanetGetInnerRadius(planet);
+    return fmaxf(outerRadius, innerRadius);
 }
 
 /**
@@ -220,25 +221,22 @@ float PlanetGetCollisionRadius(const Planet *planet) {
  * @param outerRadius The outer radius of the planet.
  */
 static void DrawClaimProgress(const Planet *planet, float outerRadius) {
-	if (planet->claimant == NULL) {
-		return;
-	}
+    if (planet->claimant == NULL) {
+        return;
+    }
 
-	float innerEdge = fmaxf(outerRadius - PLANET_RING_THICKNESS, 0.0f);
-	float ratio = 0.0f;
-	if (planet->maxFleetCapacity > 0.0f) {
-		ratio = ClampFleetSize(planet, planet->currentFleetSize) / planet->maxFleetCapacity;
-	}
-	float radius = innerEdge * ratio;
+    float innerEdge = fmaxf(outerRadius - PLANET_RING_THICKNESS, 0.0f);
+    float ratio = 0.0f;
+    if (planet->maxFleetCapacity > 0.0f) {
+        ratio = ClampFleetSize(planet, planet->currentFleetSize) / planet->maxFleetCapacity;
+    }
+    float radius = innerEdge * ratio;
 
-	if (radius <= 0.0f) {
-		return;
-	}
+    if (radius <= 0.0f) {
+        return;
+    }
 
-	if (planet->claimant != NULL) {
-		glColor4fv(planet->claimant->color);
-	}
-	DrawFilledCircle(planet->position.x, planet->position.y, radius, 128);
+    DrawFeatheredFilledInCircle(planet->position.x, planet->position.y, radius, PLANET_DISC_FEATHER, planet->claimant->color);
 }
 
 /**
@@ -250,54 +248,51 @@ static void DrawClaimProgress(const Planet *planet, float outerRadius) {
  * @param planet A pointer to the Planet object to draw.
  */
 void PlanetDraw(const Planet *planet) {
-	if (planet == NULL) {
-		return;
-	}
+    if (planet == NULL) {
+        return;
+    }
 
-	float outerRadius = PlanetGetOuterRadius(planet);
-	float innerRadius = PlanetGetInnerRadius(planet);
+    float outerRadius = PlanetGetOuterRadius(planet);
+    float innerRadius = PlanetGetInnerRadius(planet);
 
-	// We first draw the glow effect for the planet.
-	PlanetDrawGlow(planet, outerRadius);
+    // We first draw the glow effect for the planet.
+    PlanetDrawGlow(planet, outerRadius);
 
-    // Determine if the planet is over capacity.
-	bool overCapacity = planet->currentFleetSize > planet->maxFleetCapacity && planet->owner != NULL;
+    // Determine if the planet is over capacity for drawing purposes (slightly different logic here with >= instead of >
+    // since if they are equal, the inner circle would completely fill the ring anyway).
+    bool overCapacity = planet->currentFleetSize >= planet->maxFleetCapacity && planet->owner != NULL;
 
     // If the planet is not over capacity, draw the ring.
     // Otherwise, we skip drawing the ring since it would be fully encompassed by the filled circle
     // drawn for the number of ships present on the planet.
-	if (!overCapacity) {
-		float ringColor[4];
-		if (planet->owner != NULL) {
-			ringColor[0] = planet->owner->color[0];
-			ringColor[1] = planet->owner->color[1];
-			ringColor[2] = planet->owner->color[2];
-			ringColor[3] = planet->owner->color[3];
-		} else {
-			ringColor[0] = NEUTRAL_COLOR[0];
-			ringColor[1] = NEUTRAL_COLOR[1];
-			ringColor[2] = NEUTRAL_COLOR[2];
-			ringColor[3] = NEUTRAL_COLOR[3];
-		}
+    if (!overCapacity) {
+        float ringColor[4];
+        if (planet->owner != NULL) {
+            ringColor[0] = planet->owner->color[0];
+            ringColor[1] = planet->owner->color[1];
+            ringColor[2] = planet->owner->color[2];
+            ringColor[3] = planet->owner->color[3];
+        } else {
+            ringColor[0] = NEUTRAL_COLOR[0];
+            ringColor[1] = NEUTRAL_COLOR[1];
+            ringColor[2] = NEUTRAL_COLOR[2];
+            ringColor[3] = NEUTRAL_COLOR[3];
+        }
 
-		float ringInner = fmaxf(outerRadius - PLANET_RING_THICKNESS, 0.0f);
-		DrawSmoothRing(planet->position.x, planet->position.y, ringInner, outerRadius, 128,
-			PLANET_RING_FEATHER, ringColor);
-	}
+        float ringInner = fmaxf(outerRadius - PLANET_RING_THICKNESS, 0.0f);
+        DrawFeatheredRing(planet->position.x, planet->position.y, ringInner, outerRadius, PLANET_RING_FEATHER, ringColor);
+    }
 
     // Draw the inner filled circle representing the current fleet size.
     // If the planet is over capacity, we draw the filled circle using the outer radius.
-	if (planet->owner != NULL) {
+    if (planet->owner != NULL) {
         // If owned, draw in owner's color.
-		float radius = overCapacity ? outerRadius : innerRadius;
-		if (radius > 0.0f) {
-			glColor4fv(planet->owner->color);
-			DrawFilledCircle(planet->position.x, planet->position.y, radius, 128);
-		}
-	} else if (planet->claimant != NULL) {
+        float radius = overCapacity ? outerRadius : innerRadius;
+        DrawFeatheredFilledInCircle(planet->position.x, planet->position.y, radius, PLANET_DISC_FEATHER, planet->owner->color);
+    } else if (planet->claimant != NULL) {
         // If unowned but claimed, draw in claimant's color.
-		DrawClaimProgress(planet, outerRadius);
-	}
+        DrawClaimProgress(planet, outerRadius);
+    }
 }
 
 /**
@@ -307,53 +302,53 @@ void PlanetDraw(const Planet *planet) {
  * @param outerRadius The outer radius of the planet.
  */
 static void PlanetDrawGlow(const Planet *planet, float outerRadius) {
-	// Basic validation of parameters.
-	if (planet == NULL || outerRadius <= 0.0f) {
-		return;
-	}
+    // Basic validation of parameters.
+    if (planet == NULL || outerRadius <= 0.0f) {
+        return;
+    }
 
-	// Determine the glow color and alpha based on ownership status.
-	// We first initialize to neutral/default values.
-	const float *sourceColor = NEUTRAL_COLOR;
-	float alpha = NEUTRAL_GLOW_ALPHA;
+    // Determine the glow color and alpha based on ownership status.
+    // We first initialize to neutral/default values.
+    const float *sourceColor = NEUTRAL_COLOR;
+    float alpha = NEUTRAL_GLOW_ALPHA;
 
-	// Then we override based on ownership.
-	if (planet->owner != NULL) {
-		sourceColor = planet->owner->color;
-		alpha = OWNED_GLOW_ALPHA;
-	} else if (planet->claimant != NULL) {
-		sourceColor = planet->claimant->color;
-		alpha = CLAIM_GLOW_ALPHA;
-	}
+    // Then we override based on ownership.
+    if (planet->owner != NULL) {
+        sourceColor = planet->owner->color;
+        alpha = OWNED_GLOW_ALPHA;
+    } else if (planet->claimant != NULL) {
+        sourceColor = planet->claimant->color;
+        alpha = CLAIM_GLOW_ALPHA;
+    }
 
-	// And then, we draw the radial gradient ring for the glow effect.
-	float innerColor[4] = {sourceColor[0], sourceColor[1], sourceColor[2], alpha};
-	float outerColor[4] = {sourceColor[0], sourceColor[1], sourceColor[2], 0.0f};
-	float haloInnerRadius = outerRadius;
-	float haloOuterRadius = outerRadius + fmaxf(outerRadius * 0.55f, 28.0f);
+    // And then, we draw the radial gradient ring for the glow effect.
+    float innerColor[4] = {sourceColor[0], sourceColor[1], sourceColor[2], alpha};
+    float outerColor[4] = {sourceColor[0], sourceColor[1], sourceColor[2], 0.0f};
+    float haloInnerRadius = outerRadius;
+    float haloOuterRadius = outerRadius + fmaxf(outerRadius * 0.55f, 28.0f);
 
-	// What glEnable(GL_BLEND) does is enable blending in OpenGL.
-	// Blending is a technique used to combine the color of a source pixel (the pixel being drawn)
-	// with the color of a destination pixel (the pixel already present in the framebuffer)
-	glEnable(GL_BLEND);
+    // What glEnable(GL_BLEND) does is enable blending in OpenGL.
+    // Blending is a technique used to combine the color of a source pixel (the pixel being drawn)
+    // with the color of a destination pixel (the pixel already present in the framebuffer)
+    glEnable(GL_BLEND);
 
-	// glBlendFunc specifies how the blending is done.
-	// The parameters GL_SRC_ALPHA and GL_ONE
-	// mean that the source color is multiplied by its alpha value,
-	// and the destination color is multiplied by 1 (i.e., added as-is).
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    // glBlendFunc specifies how the blending is done.
+    // The parameters GL_SRC_ALPHA and GL_ONE
+    // mean that the source color is multiplied by its alpha value,
+    // and the destination color is multiplied by 1 (i.e., added as-is).
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
 
-	// Finally, we draw the radial gradient ring.
-	DrawRadialGradientRing(planet->position.x, planet->position.y,
-		haloInnerRadius, haloOuterRadius, 64, innerColor, outerColor);
+    // Finally, we draw the radial gradient ring.
+    DrawRadialGradientRing(planet->position.x, planet->position.y,
+        haloInnerRadius, haloOuterRadius, 64, innerColor, outerColor);
 
-	// After drawing, we reset the blending function back to the standard alpha blending.
-	// This is important to ensure that subsequent drawing operations are not 
-	// affected by our custom blending mode.
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // After drawing, we reset the blending function back to the standard alpha blending.
+    // This is important to ensure that subsequent drawing operations are not 
+    // affected by our custom blending mode.
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	// We then disable blending to clean up the OpenGL state.
-	glDisable(GL_BLEND);
+    // We then disable blending to clean up the OpenGL state.
+    glDisable(GL_BLEND);
 }
 
 /**
@@ -367,29 +362,29 @@ static void PlanetDrawGlow(const Planet *planet, float outerRadius) {
  * @param shipCount The number of starships to spawn.
  */
 static void SpawnShipCircle(Level *level, Planet *origin, Planet *destination, int shipCount) {
-	if (shipCount <= 0) {
-		return;
-	}
+    if (shipCount <= 0) {
+        return;
+    }
 
-	float outerRadius = PlanetGetOuterRadius(origin);
-	float spawnRadius = outerRadius + STARSHIP_RADIUS * 1.5f;
-	float angleStep = (float)(2.0 * M_PI) / (float)shipCount;
+    float outerRadius = PlanetGetOuterRadius(origin);
+    float spawnRadius = outerRadius + STARSHIP_RADIUS * 1.5f;
+    float angleStep = (float)(2.0 * M_PI) / (float)shipCount;
 
     // We spawn the starships evenly spaced in a circle around the origin planet
     // starting from angle 0 and moving counter-clockwise.
-	for (int i = 0; i < shipCount; ++i) {
+    for (int i = 0; i < shipCount; ++i) {
 
         // Calculate the spawn position and velocity for each starship.
-		float angle = angleStep * i;
-		Vec2 direction = {cosf(angle), sinf(angle)};
-		Vec2 position = Vec2Add(origin->position, Vec2Scale(direction, spawnRadius));
-		Vec2 velocity = Vec2Scale(direction, STARSHIP_INITIAL_SPEED);
+        float angle = angleStep * i;
+        Vec2 direction = {cosf(angle), sinf(angle)};
+        Vec2 position = Vec2Add(origin->position, Vec2Scale(direction, spawnRadius));
+        Vec2 velocity = Vec2Scale(direction, STARSHIP_INITIAL_SPEED);
         
         // Spawn the starship heading towards the destination planet.
-		if (LevelSpawnStarship(level, position, velocity, origin->owner, destination) == NULL) {
-			break;
-		}
-	}
+        if (LevelSpawnStarship(level, position, velocity, origin->owner, destination) == NULL) {
+            break;
+        }
+    }
 }
 
 /**
@@ -406,34 +401,34 @@ static void SpawnShipCircle(Level *level, Planet *origin, Planet *destination, i
  */
 bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
     // Basic validation of parameters.
-	if (origin == NULL || destination == NULL || level == NULL) {
-		return false;
-	}
+    if (origin == NULL || destination == NULL || level == NULL) {
+        return false;
+    }
 
     // A planet cannot send a fleet to itself.
-	if (origin == destination) {
-		return false;
-	}
+    if (origin == destination) {
+        return false;
+    }
 
     // The origin planet must be owned to send a fleet.
-	if (origin->owner == NULL) {
-		return false;
-	}
+    if (origin->owner == NULL) {
+        return false;
+    }
 
     // Determine the number of starships to send.
     // We round the current fleet size to the nearest integer.
-	int shipCount = (int)floorf(origin->currentFleetSize + 0.5f);
-	if (shipCount <= 0) {
-		return false;
-	}
+    int shipCount = (int)floorf(origin->currentFleetSize + 0.5f);
+    if (shipCount <= 0) {
+        return false;
+    }
 
     // Reduce the origin planet's fleet size to 0.0f
     // since we are sending all available ships.
-	origin->currentFleetSize = 0.0f;
+    origin->currentFleetSize = 0.0f;
 
     // Actually spawn the starship objects into the level.
-	SpawnShipCircle(level, origin, destination, shipCount);
-	return true;
+    SpawnShipCircle(level, origin, destination, shipCount);
+    return true;
 }
 
 /**
@@ -445,28 +440,28 @@ bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
  * @param ship A pointer to the incoming Starship object.
  */
 void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
-	if (planet == NULL || ship == NULL || ship->owner == NULL) {
-		return;
-	}
+    if (planet == NULL || ship == NULL || ship->owner == NULL) {
+        return;
+    }
 
     // We assume that the ship has an owner faction.
-	const Faction *attacker = ship->owner;
+    const Faction *attacker = ship->owner;
 
     // Handle the interaction based on the planet's ownership status.
-	if (planet->owner != NULL) {
+    if (planet->owner != NULL) {
 
         // Planet is owned.
-		if (planet->owner == attacker) {
+        if (planet->owner == attacker) {
             // One ship from owner increases fleet size
             // by 1.0f.
-			planet->currentFleetSize += 1.0f;
-			return;
-		}
+            planet->currentFleetSize += 1.0f;
+            return;
+        }
 
         // Otherwise one ship from attacker decreases fleet size
         // by 1.0f.
-		planet->currentFleetSize -= 1.0f;
-		if (planet->currentFleetSize < 0.0f) {
+        planet->currentFleetSize -= 1.0f;
+        if (planet->currentFleetSize < 0.0f) {
             // In case of negative fleet size,
             // it indicates the defending forces have been
             // totally reduced, and the current owners are
@@ -475,43 +470,43 @@ void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
 
             // We need to make sure that the leftovers from the attacker which finished
             // off the defending forces are carried over to the new ownership.
-			float surplus = -planet->currentFleetSize;
-			planet->owner = attacker;
-			planet->claimant = NULL;
-			planet->currentFleetSize = fmaxf(surplus, 1.0f);
-		}
-		return;
-	}
+            float surplus = -planet->currentFleetSize;
+            planet->owner = attacker;
+            planet->claimant = NULL;
+            planet->currentFleetSize = fmaxf(surplus, 1.0f);
+        }
+        return;
+    }
 
     // Planet is unowned and unclaimed.
-	if (planet->claimant == NULL) {
+    if (planet->claimant == NULL) {
         // First ship from attacker claims the planet.
-		planet->claimant = attacker;
-		planet->currentFleetSize = 1.0f;
-		return;
-	}
+        planet->claimant = attacker;
+        planet->currentFleetSize = 1.0f;
+        return;
+    }
 
     // Planet is unowned but claimed.
-	if (planet->claimant == attacker) {
+    if (planet->claimant == attacker) {
         // One ship from claimant increases fleet size
         // by 1.0f.
-		planet->currentFleetSize += 1.0f;
-		if (planet->currentFleetSize >= planet->maxFleetCapacity && planet->maxFleetCapacity > 0.0f) {
+        planet->currentFleetSize += 1.0f;
+        if (planet->currentFleetSize >= planet->maxFleetCapacity && planet->maxFleetCapacity > 0.0f) {
             // If the claimant's fleet size meets or exceeds max capacity,
             // they successfully capture the planet.
-			planet->owner = planet->claimant;
-			planet->claimant = NULL;
-			planet->currentFleetSize = planet->maxFleetCapacity;
-		}
-		return;
-	}
+            planet->owner = planet->claimant;
+            planet->claimant = NULL;
+            planet->currentFleetSize = planet->maxFleetCapacity;
+        }
+        return;
+    }
 
     // Ship is from a different faction than the claimant.
     // One ship from attacker decreases fleet size by 1.0f,
     // thereby interrupting the claimant's progress towards capturing the planet.
-	planet->currentFleetSize -= 1.0f;
-	if (planet->currentFleetSize <= 0.0f) {
-		planet->claimant = attacker;
-		planet->currentFleetSize = 1.0f;
-	}
+    planet->currentFleetSize -= 1.0f;
+    if (planet->currentFleetSize <= 0.0f) {
+        planet->claimant = attacker;
+        planet->currentFleetSize = 1.0f;
+    }
 }

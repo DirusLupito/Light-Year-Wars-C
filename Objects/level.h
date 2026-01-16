@@ -39,8 +39,8 @@
 // It is used to communicate faction information over the network.
 // A faction has an ID and a color (RGBA), so we include these fields here.
 typedef struct LevelPacketFactionInfo {
-	int32_t id;
-	float color[4];
+    int32_t id;
+    float color[4];
 } LevelPacketFactionInfo;
 
 // A LevelPacketPlanetFullInfo represents the full network representation of a planet.
@@ -48,11 +48,11 @@ typedef struct LevelPacketFactionInfo {
 // A planet has a position, max fleet capacity, current fleet size,
 // an owner faction ID, and a claimant faction ID.
 typedef struct LevelPacketPlanetFullInfo {
-	Vec2 position;
-	float maxFleetCapacity;
-	float currentFleetSize;
-	int32_t ownerId;
-	int32_t claimantId;
+    Vec2 position;
+    float maxFleetCapacity;
+    float currentFleetSize;
+    int32_t ownerId;
+    int32_t claimantId;
 } LevelPacketPlanetFullInfo;
 
 // A LevelPacketPlanetSnapshotInfo represents a snapshot network representation of a planet.
@@ -60,19 +60,19 @@ typedef struct LevelPacketPlanetFullInfo {
 // The only dynamic fields of a planet are its current fleet size,
 // owner faction ID, and claimant faction ID.
 typedef struct LevelPacketPlanetSnapshotInfo {
-	float currentFleetSize;
-	int32_t ownerId;
-	int32_t claimantId;
+    float currentFleetSize;
+    int32_t ownerId;
+    int32_t claimantId;
 } LevelPacketPlanetSnapshotInfo;
 
 // A LevelPacketStarshipInfo represents the network representation of a starship.
 // It is used to communicate starship information over the network.
 // A starship has a position, velocity, owner faction ID, and target planet index.
 typedef struct LevelPacketStarshipInfo {
-	Vec2 position;
-	Vec2 velocity;
-	int32_t ownerId;
-	int32_t targetPlanetIndex;
+    Vec2 position;
+    Vec2 velocity;
+    int32_t ownerId;
+    int32_t targetPlanetIndex;
 } LevelPacketStarshipInfo;
 
 // A LevelFullPacket represents the header of a full level packet.
@@ -80,12 +80,12 @@ typedef struct LevelPacketStarshipInfo {
 // This should be followed by arrays of faction info, planet info, and starship info
 // in that order to communicate the full state of the level.
 typedef struct LevelFullPacket {
-	uint32_t type;
-	float width;
-	float height;
-	uint32_t factionCount;
-	uint32_t planetCount;
-	uint32_t starshipCount;
+    uint32_t type;
+    float width;
+    float height;
+    uint32_t factionCount;
+    uint32_t planetCount;
+    uint32_t starshipCount;
 } LevelFullPacket;
 
 // A LevelSnapshotPacket represents the header of a level snapshot packet.
@@ -93,9 +93,9 @@ typedef struct LevelFullPacket {
 // It should be followed by arrays of planet snapshot info and starship info
 // in that order to communicate the dynamic state of the level.
 typedef struct LevelSnapshotPacket {
-	uint32_t type;
-	uint32_t planetCount;
-	uint32_t starshipCount;
+    uint32_t type;
+    uint32_t planetCount;
+    uint32_t starshipCount;
 } LevelSnapshotPacket;
 #pragma pack(pop)
 
@@ -106,8 +106,8 @@ typedef struct LevelSnapshotPacket {
 // The other packets defined above are the concrete representations of specific packet types,
 // while this struct is a generic container for any packet data.
 typedef struct LevelPacketBuffer {
-	void *data;
-	size_t size;
+    void *data;
+    size_t size;
 } LevelPacketBuffer;
 
 // A level contains factions, planets, starships, and trail effects for those starships.
@@ -118,21 +118,21 @@ typedef struct LevelPacketBuffer {
 // It provides functions to initialize, release, configure, spawn starships, remove starships, and update the level state.
 // That said, the level does not handle rendering or user input directly.
 typedef struct Level {
-	Faction *factions;
-	size_t factionCount;
+    Faction *factions;
+    size_t factionCount;
 
-	Planet *planets;
-	size_t planetCount;
+    Planet *planets;
+    size_t planetCount;
 
-	Starship *starships;
-	size_t starshipCount;
-	size_t starshipCapacity;
-	StarshipTrailEffect *trailEffects;
-	size_t trailEffectCount;
-	size_t trailEffectCapacity;
+    Starship *starships;
+    size_t starshipCount;
+    size_t starshipCapacity;
+    StarshipTrailEffect *trailEffects;
+    size_t trailEffectCount;
+    size_t trailEffectCapacity;
 
-	float width;
-	float height;
+    float width;
+    float height;
 } Level;
 
 /**

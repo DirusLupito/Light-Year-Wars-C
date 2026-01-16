@@ -12,8 +12,8 @@
 // A faction has an ID and a color.
 // It represents a group of planets and starships controlled by a player or AI.
 typedef struct Faction {
-	int id;
-	float color[4];
+    int id;
+    float color[4];
 } Faction;
 
 /**

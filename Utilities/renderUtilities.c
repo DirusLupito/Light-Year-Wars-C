@@ -134,12 +134,19 @@ void DrawRing(float cx, float cy, float innerRadius, float outerRadius, int segm
  * @param featherWidth Width of the fade zone applied to each edge.
  * @param color RGBA color applied to the solid portion of the ring.
  */
-void DrawSmoothRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
-    float featherWidth, const float color[4]) {
-    if (outerRadius <= 0.0f || innerRadius < 0.0f || innerRadius >= outerRadius || segments < 3 || color == NULL) {
+void DrawFeatheredRing(float cx, float cy, float innerRadius, float outerRadius, float featherWidth, const float color[4]) {
+    // Basic validation of parameters.
+    if (outerRadius <= 0.0f || innerRadius < 0.0f || innerRadius >= outerRadius || color == NULL) {
         return;
     }
 
+    // Get the number of segments to use for drawing the ring based on its size.
+    int segments = ComputeCircleSegments(outerRadius);
+    if (segments <= 0) {
+        return;
+    }
+
+    // If no feathering is requested, draw a standard ring.
     float alpha = color[3];
     if (featherWidth <= 0.0f || alpha <= 0.0f) {
         glColor4fv(color);
@@ -147,33 +154,51 @@ void DrawSmoothRing(float cx, float cy, float innerRadius, float outerRadius, in
         return;
     }
 
+    // Feathering is essentially a gradient transition from opaque to transparent
+    // at both the inner and outer edges of the ring.
+    // The way it works is that we define two fade zones:
+    // 1. Inner fade zone: from innerRadius to innerRadius + featherWidth
+    // 2. Outer fade zone: from outerRadius - featherWidth to outerRadius
+    // Within these zones, we interpolate the alpha value from 0 to the specified color alpha.
+    // This creates a smooth transition effect.
+
+    // Otherwise, we proceed with feathering.
+
+    // Clamp the feather width to avoid excessive feathering.
     float ringWidth = outerRadius - innerRadius;
     float clampedFeather = fminf(featherWidth, ringWidth * 0.5f);
 
+    // Calculate the inner and outer fade boundaries.
     float innerFadeStart = innerRadius;
     float innerFadeEnd = innerRadius + clampedFeather;
     float outerFadeStart = outerRadius - clampedFeather;
     float outerFadeEnd = outerRadius;
 
+    // Enable blending for smooth transparency transitions.
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    // Draw the inner feathered section
     float opaqueColor[4] = {color[0], color[1], color[2], alpha};
     float transparentColor[4] = {color[0], color[1], color[2], 0.0f};
 
+    // If there is space between innerFadeStart and innerFadeEnd, draw that gradient
     if (innerFadeEnd > innerFadeStart) {
         DrawRadialGradientRing(cx, cy, innerFadeStart, innerFadeEnd, segments, transparentColor, opaqueColor);
     }
 
+    // If there is a solid section between innerFadeEnd and outerFadeStart, draw that
     if (outerFadeEnd > outerFadeStart) {
         DrawRadialGradientRing(cx, cy, outerFadeStart, outerFadeEnd, segments, opaqueColor, transparentColor);
     }
 
+    // If there is a solid section between innerFadeEnd and outerFadeStart, draw that
     if (outerFadeStart > innerFadeEnd) {
         glColor4fv(color);
         DrawRing(cx, cy, innerFadeEnd, outerFadeStart, segments);
     }
 
+    // Cleanup: disable blending to restore OpenGL state.
     glDisable(GL_BLEND);
 }
 
@@ -219,4 +244,97 @@ void DrawRadialGradientRing(float cx, float cy, float innerRadius, float outerRa
         glVertex2f(innerX, innerY);
     }
     glEnd();
+}
+
+/**
+ * Computes the number of segments to use for drawing a circle of the given radius.
+ * This helps ensure that circles are drawn smoothly regardless of their size.
+ * Specifically, this formula aims for approximately 1.5 units of arc length per segment.
+ * @param radius The radius of the circle.
+ * @return The computed number of segments for the circle.
+ */
+int ComputeCircleSegments(float radius) {
+    // We use the absolute value of the radius to avoid negative values.
+    float absRadius = fabsf(radius);
+    if (absRadius <= 0.0f) {
+        // And if the absolute radius is zero or somehow negative, 
+        // we cannot draw a circle.
+        return 0;
+    }
+
+    // Calculate circumference = 2 * pi * r
+    float circumference = absRadius * 2.0f * (float)M_PI;
+
+    // And then determine segments such that each segment covers about 1.5 units of arc length.
+    int segments = (int)ceilf(circumference / 1.5f);
+
+    // Clamp segments to a reasonable range to avoid too few or too many segments.
+    if (segments < MIN_CIRCLE_SEGMENTS) {
+        segments = MIN_CIRCLE_SEGMENTS;
+    } else if (segments > MAX_CIRCLE_SEGMENTS) {
+        segments = MAX_CIRCLE_SEGMENTS;
+    }
+
+    return segments;
+}
+
+/**
+ * Draws a filled circle with feathered edges.
+ * The feathering creates a smooth transition from the circle's color to transparency.
+ * @param cx The x-coordinate of the circle's center.
+ * @param cy The y-coordinate of the circle's center.
+ * @param radius The radius of the circle.
+ * @param featherWidth The width of the feathering effect at the edge of the circle.
+ * @param color The RGBA color of the circle.
+ */
+void DrawFeatheredFilledInCircle(float cx, float cy, float radius, float featherWidth, const float color[4]) {
+    // Basic validation of parameters.
+    if (color == NULL || radius <= 0.0f) {
+        return;
+    }
+
+    // Get the number of segments to use for drawing the circle based on its size.
+    int segments = ComputeCircleSegments(radius);
+    if (segments <= 0) {
+        return;
+    }
+
+    // Feathering here works by drawing a solid inner circle
+    // and then overlaying a radial gradient ring that fades to transparency
+    // over the specified feather width.
+
+    // Clamp the feather width to avoid excessive feathering.
+    float clampedFeather = featherWidth;
+    if (clampedFeather < 0.0f) {
+        clampedFeather = 0.0f;
+    }
+    if (clampedFeather > radius) {
+        clampedFeather = radius;
+    }
+
+    // Draw the solid inner circle (non-feathered part).
+    float innerRadius = radius - clampedFeather;
+    if (innerRadius > 0.0f) {
+        glColor4fv(color);
+        DrawFilledCircle(cx, cy, innerRadius, segments);
+    } else {
+        innerRadius = 0.0f;
+    }
+
+    // If no feathering is requested, we are done.
+    if (clampedFeather <= 0.0f) {
+        if (innerRadius <= 0.0f) {
+            glColor4fv(color);
+            DrawFilledCircle(cx, cy, radius, segments);
+        }
+        return;
+    }
+
+    // Otherwise, draw the feathered edge as a radial gradient ring.
+    float innerColor[4] = {color[0], color[1], color[2], color[3]};
+    float outerColor[4] = {color[0], color[1], color[2], 0.0f};
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    DrawRadialGradientRing(cx, cy, innerRadius, radius, segments, innerColor, outerColor);
+    glDisable(GL_BLEND);
 }

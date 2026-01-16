@@ -657,8 +657,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 if (selected_planet != NULL) {
                     float radius = PlanetGetOuterRadius(selected_planet);
                     float highlightColor[4] = {1.0f, 1.0f, 1.0f, 0.85f};
-                    DrawSmoothRing(selected_planet->position.x, selected_planet->position.y,
-                        radius + 2.0f, radius + 5.0f, 32, 1.2f, highlightColor);
+                    DrawFeatheredRing(selected_planet->position.x, selected_planet->position.y,
+                        radius + 2.0f, radius + 5.0f, 1.2f, highlightColor);
                 }
 
                 // Draw each starship in the level

@@ -18,7 +18,16 @@ typedef struct {
 } Frame;
 
 // Constant Definitions
-# define M_PI 3.14159265358979323846 // Sadly undefined in math.h
+
+// Pi, the mathematical constant. The ratio of a circle's circumference to its diameter.
+#define M_PI 3.14159265358979323846
+
+// Minimum number of segments to use when drawing circles to ensure smoothness.
+#define MIN_CIRCLE_SEGMENTS 32
+
+// Maximum number of segments to use when drawing circles to avoid excessive detail.
+#define MAX_CIRCLE_SEGMENTS 256
+
 
 /**
  * Draws a hollow circle using OpenGL.
@@ -64,8 +73,7 @@ void DrawRing(float cx, float cy, float innerRadius, float outerRadius, int segm
  * @param featherWidth Width of the fade zone applied to each edge.
  * @param color RGBA color applied to the solid portion of the ring.
  */
-void DrawSmoothRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
-    float featherWidth, const float color[4]);
+void DrawFeatheredRing(float cx, float cy, float innerRadius, float outerRadius, float featherWidth, const float color[4]);
 
 /**
  * Draws a radial gradient ring (or disc) using OpenGL.
@@ -82,5 +90,25 @@ void DrawSmoothRing(float cx, float cy, float innerRadius, float outerRadius, in
  */
 void DrawRadialGradientRing(float cx, float cy, float innerRadius, float outerRadius, int segments,
     const float innerColor[4], const float outerColor[4]);
+
+/**
+ * Draws a filled circle with feathered edges.
+ * The feathering creates a smooth transition from the circle's color to transparency.
+ * @param cx The x-coordinate of the circle's center.
+ * @param cy The y-coordinate of the circle's center.
+ * @param radius The radius of the circle.
+ * @param featherWidth The width of the feathering effect at the edge of the circle.
+ * @param color The RGBA color of the circle.
+ */
+void DrawFeatheredFilledInCircle(float cx, float cy, float radius, float featherWidth, const float color[4]);
+
+/**
+ * Computes the number of segments to use for drawing a circle of the given radius.
+ * This helps ensure that circles are drawn smoothly regardless of their size.
+ * Specifically, this formula aims for approximately 1.5 units of arc length per segment.
+ * @param radius The radius of the circle.
+ * @return The computed number of segments for the circle.
+ */
+int ComputeCircleSegments(float radius);
 
 #endif // _RENDER_UTILITIES_H_

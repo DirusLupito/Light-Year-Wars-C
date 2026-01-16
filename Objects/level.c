@@ -22,23 +22,23 @@
 void LevelInit(Level *level) {
     // Check for NULL pointer
     // since we need a valid Level to initialize.
-	if (level == NULL) {
-		return;
-	}
+    if (level == NULL) {
+        return;
+    }
 
     // Basically we set all members to zero or NULL.
-	level->factions = NULL;
-	level->factionCount = 0;
-	level->planets = NULL;
-	level->planetCount = 0;
-	level->starships = NULL;
-	level->starshipCount = 0;
-	level->starshipCapacity = 0;
-	level->trailEffects = NULL;
-	level->trailEffectCount = 0;
-	level->trailEffectCapacity = 0;
-	level->width = 0.0f;
-	level->height = 0.0f;
+    level->factions = NULL;
+    level->factionCount = 0;
+    level->planets = NULL;
+    level->planetCount = 0;
+    level->starships = NULL;
+    level->starshipCount = 0;
+    level->starshipCapacity = 0;
+    level->trailEffects = NULL;
+    level->trailEffectCount = 0;
+    level->trailEffectCapacity = 0;
+    level->width = 0.0f;
+    level->height = 0.0f;
 }
 
 /**
@@ -48,9 +48,9 @@ void LevelInit(Level *level) {
  * @param level A pointer to the Level object to release.
  */
 void LevelRelease(Level *level) {
-	if (level == NULL) {
-		return;
-	}
+    if (level == NULL) {
+        return;
+    }
 
     // Since we assume level is the owner of its internal arrays,
     // and that the passed level pointer is valid, we can free them here.
@@ -58,25 +58,25 @@ void LevelRelease(Level *level) {
     // is that according to the C standard, it is safe to call free() with a NULL pointer.
     // This means we do not need to check if each pointer is NULL before calling free().
     // It also means that it is safe to call free() on a Level that has not been fully configured.
-	free(level->factions);
-	free(level->planets);
-	free(level->starships);
-	free(level->trailEffects);
+    free(level->factions);
+    free(level->planets);
+    free(level->starships);
+    free(level->trailEffects);
 
     // After freeing, we set all members to NULL or zero
     // to avoid dangling pointers and stale data.
-	level->factions = NULL;
-	level->planets = NULL;
-	level->starships = NULL;
-	level->trailEffects = NULL;
-	level->factionCount = 0;
-	level->planetCount = 0;
-	level->starshipCount = 0;
-	level->starshipCapacity = 0;
-	level->trailEffectCount = 0;
-	level->trailEffectCapacity = 0;
-	level->width = 0.0f;
-	level->height = 0.0f;
+    level->factions = NULL;
+    level->planets = NULL;
+    level->starships = NULL;
+    level->trailEffects = NULL;
+    level->factionCount = 0;
+    level->planetCount = 0;
+    level->starshipCount = 0;
+    level->starshipCapacity = 0;
+    level->trailEffectCount = 0;
+    level->trailEffectCapacity = 0;
+    level->width = 0.0f;
+    level->height = 0.0f;
 }
 
 /**
@@ -90,24 +90,24 @@ static bool AllocateArray(void **pointer, size_t elementSize, size_t count) {
 
     // If we're asked to allocate zero elements,
     // we set the pointer to NULL and return true.
-	if (count == 0) {
-		*pointer = NULL;
-		return true;
-	}
+    if (count == 0) {
+        *pointer = NULL;
+        return true;
+    }
 
     // Otherwise, we allocate the requested memory
     // and zero-initialize it using calloc.
-	void *memory = calloc(count, elementSize);
+    void *memory = calloc(count, elementSize);
 
-	if (memory == NULL) {
+    if (memory == NULL) {
         // If allocation failed, we return false.
-		return false;
-	}
+        return false;
+    }
 
     // If allocation succeeded, we set the given pointer passed by reference
     // to point to the newly allocated memory and return true.
-	*pointer = memory;
-	return true;
+    *pointer = memory;
+    return true;
 }
 
 /**
@@ -122,59 +122,59 @@ static bool AllocateArray(void **pointer, size_t elementSize, size_t count) {
  * @return true if the configuration was successful, false otherwise.
  */
 bool LevelConfigure(Level *level, size_t factionCount, size_t planetCount, size_t starshipCapacity) {
-	if (level == NULL) {
-		return false;
-	}
+    if (level == NULL) {
+        return false;
+    }
 
     // We know at this point that level is valid,
     // so now we just need to make sure we do not leak memory
     // if the level was previously configured.
     // We also clean up any stale data here.
-	LevelRelease(level);
+    LevelRelease(level);
 
     // Now with a clean level object we can allocate the internal arrays.
 
     // We first allocate factions.
-	if (!AllocateArray((void **)&level->factions, sizeof(Faction), factionCount)) {
-		LevelRelease(level);
-		return false;
-	}
+    if (!AllocateArray((void **)&level->factions, sizeof(Faction), factionCount)) {
+        LevelRelease(level);
+        return false;
+    }
 
     // Then we allocate planets.
-	if (!AllocateArray((void **)&level->planets, sizeof(Planet), planetCount)) {
-		LevelRelease(level);
-		return false;
-	}
+    if (!AllocateArray((void **)&level->planets, sizeof(Planet), planetCount)) {
+        LevelRelease(level);
+        return false;
+    }
 
     // And finally if we need starships, we allocate them here.
-	if (starshipCapacity > 0) {
-		level->starships = (Starship *)malloc(sizeof(Starship) * starshipCapacity);
-		if (level->starships == NULL) {
-			LevelRelease(level);
-			return false;
-		}
-		// Each starship is also associated with some data for its trail effects
-		// so we allocate that memory here as well.
-		level->trailEffects = (StarshipTrailEffect *)malloc(sizeof(StarshipTrailEffect) * starshipCapacity);
-		if (level->trailEffects == NULL) {
-			LevelRelease(level);
-			return false;
-		}
-		level->trailEffectCapacity = starshipCapacity;
-	} else {
-		// If no starship capacity is requested, 
-		// we do not need to allocate any memory for trail effects.
-		level->trailEffects = NULL;
-		level->trailEffectCapacity = 0;
-	}
+    if (starshipCapacity > 0) {
+        level->starships = (Starship *)malloc(sizeof(Starship) * starshipCapacity);
+        if (level->starships == NULL) {
+            LevelRelease(level);
+            return false;
+        }
+        // Each starship is also associated with some data for its trail effects
+        // so we allocate that memory here as well.
+        level->trailEffects = (StarshipTrailEffect *)malloc(sizeof(StarshipTrailEffect) * starshipCapacity);
+        if (level->trailEffects == NULL) {
+            LevelRelease(level);
+            return false;
+        }
+        level->trailEffectCapacity = starshipCapacity;
+    } else {
+        // If no starship capacity is requested, 
+        // we do not need to allocate any memory for trail effects.
+        level->trailEffects = NULL;
+        level->trailEffectCapacity = 0;
+    }
 
     // With all our allocations done, we can now simply fill in the level members.
-	level->factionCount = factionCount;
-	level->planetCount = planetCount;
-	level->starshipCapacity = starshipCapacity;
-	level->starshipCount = 0;
-	level->trailEffectCount = 0;
-	return true;
+    level->factionCount = factionCount;
+    level->planetCount = planetCount;
+    level->starshipCapacity = starshipCapacity;
+    level->starshipCount = 0;
+    level->trailEffectCount = 0;
+    return true;
 }
 
 /**
@@ -191,28 +191,28 @@ bool LevelConfigure(Level *level, size_t factionCount, size_t planetCount, size_
 static bool EnsureStarshipCapacity(Level *level, size_t minCapacity) {
 
     // We don't need to do anything if we already have enough capacity.
-	if (level->starshipCapacity >= minCapacity) {
-		return true;
-	}
+    if (level->starshipCapacity >= minCapacity) {
+        return true;
+    }
 
     // New capacity equals double the current capacity, or 16 if current capacity is zero.
-	size_t newCapacity = level->starshipCapacity == 0 ? 16 : level->starshipCapacity * 2;
-	while (newCapacity < minCapacity) {
-		newCapacity *= 2;
-	}
+    size_t newCapacity = level->starshipCapacity == 0 ? 16 : level->starshipCapacity * 2;
+    while (newCapacity < minCapacity) {
+        newCapacity *= 2;
+    }
 
     // Now that we know how much memory we need, we can actually ask for it here.
-	Starship *resized = (Starship *)realloc(level->starships, sizeof(Starship) * newCapacity);
-	if (resized == NULL) {
-		return false;
-	}
+    Starship *resized = (Starship *)realloc(level->starships, sizeof(Starship) * newCapacity);
+    if (resized == NULL) {
+        return false;
+    }
 
     // If realloc succeeded, we must update the level's starship pointer
     // and also our internal memory management data on how much memory we have allocated
     // to hold starships.
-	level->starships = resized;
-	level->starshipCapacity = newCapacity;
-	return true;
+    level->starships = resized;
+    level->starshipCapacity = newCapacity;
+    return true;
 }
 
 /**
@@ -227,30 +227,30 @@ static bool EnsureStarshipCapacity(Level *level, size_t minCapacity) {
  * @return true if the trail effect array has enough capacity, false otherwise.
  */
 static bool EnsureTrailEffectCapacity(Level *level, size_t minCapacity) {
-	// We don't need to do anything if we already have enough capacity.
-	if (level->trailEffectCapacity >= minCapacity) {
-		return true;
-	}
+    // We don't need to do anything if we already have enough capacity.
+    if (level->trailEffectCapacity >= minCapacity) {
+        return true;
+    }
 
-	// New capacity equals double the current capacity, or 16 if current capacity is zero.
-	// This is intentionally very similar to EnsureStarshipCapacity.
-	size_t newCapacity = level->trailEffectCapacity == 0 ? 16 : level->trailEffectCapacity * 2;
-	while (newCapacity < minCapacity) {
-		newCapacity *= 2;
-	}
+    // New capacity equals double the current capacity, or 16 if current capacity is zero.
+    // This is intentionally very similar to EnsureStarshipCapacity.
+    size_t newCapacity = level->trailEffectCapacity == 0 ? 16 : level->trailEffectCapacity * 2;
+    while (newCapacity < minCapacity) {
+        newCapacity *= 2;
+    }
 
-	// Now that we know how much memory we need, we can actually ask for it here.
-	StarshipTrailEffect *resized = (StarshipTrailEffect *)realloc(level->trailEffects, sizeof(StarshipTrailEffect) * newCapacity);
-	if (resized == NULL) {
-		return false;
-	}
+    // Now that we know how much memory we need, we can actually ask for it here.
+    StarshipTrailEffect *resized = (StarshipTrailEffect *)realloc(level->trailEffects, sizeof(StarshipTrailEffect) * newCapacity);
+    if (resized == NULL) {
+        return false;
+    }
 
-	// If realloc succeeded, we must update the level's trail effect pointer
-	// and also our internal memory management data on how much memory we have allocated
-	// to hold trail effects.
-	level->trailEffects = resized;
-	level->trailEffectCapacity = newCapacity;
-	return true;
+    // If realloc succeeded, we must update the level's trail effect pointer
+    // and also our internal memory management data on how much memory we have allocated
+    // to hold trail effects.
+    level->trailEffects = resized;
+    level->trailEffectCapacity = newCapacity;
+    return true;
 }
 
 /**
@@ -262,34 +262,34 @@ static bool EnsureTrailEffectCapacity(Level *level, size_t minCapacity) {
  * @param ship A pointer to the Starship object for which to spawn the trail effect.
  */
 static void LevelSpawnTrailEffect(Level *level, const Starship *ship) {
-	// Basic validation of parameters.
-	if (level == NULL || ship == NULL) {
-		return;
-	}
+    // Basic validation of parameters.
+    if (level == NULL || ship == NULL) {
+        return;
+    }
 
-	// Ensure we have enough capacity for a new trail effect.
-	if (!EnsureTrailEffectCapacity(level, level->trailEffectCount + 1)) {
-		return;
-	}
+    // Ensure we have enough capacity for a new trail effect.
+    if (!EnsureTrailEffectCapacity(level, level->trailEffectCount + 1)) {
+        return;
+    }
 
-	// Create the trail effect based on the starship's trail data.
-	float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    // Create the trail effect based on the starship's trail data.
+    float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
-	// Get the starship's color for the trail effect.
-	StarshipResolveColor(ship, color);
+    // Get the starship's color for the trail effect.
+    StarshipResolveColor(ship, color);
 
-	// Initialize the trail effect.
-	StarshipTrailEffect effect = {0};
-	StarshipTrailEffectInit(&effect, ship, color);
+    // Initialize the trail effect.
+    StarshipTrailEffect effect = {0};
+    StarshipTrailEffectInit(&effect, ship, color);
 
-	// Only add the effect if it has alive samples.
-	if (!StarshipTrailEffectIsAlive(&effect)) {
-		return;
-	}
+    // Only add the effect if it has alive samples.
+    if (!StarshipTrailEffectIsAlive(&effect)) {
+        return;
+    }
 
-	// Add the effect to the level's trail effects array.
-	level->trailEffects[level->trailEffectCount] = effect;
-	level->trailEffectCount += 1;
+    // Add the effect to the level's trail effects array.
+    level->trailEffects[level->trailEffectCount] = effect;
+    level->trailEffectCount += 1;
 }
 
 /**
@@ -307,19 +307,19 @@ static void LevelSpawnTrailEffect(Level *level, const Starship *ship) {
  * @return A pointer to the spawned Starship, or NULL if spawning failed.
  */
 Starship *LevelSpawnStarship(Level *level, Vec2 position, Vec2 velocity, const Faction *owner, Planet *target) {
-	if (level == NULL || target == NULL) {
-		return NULL;
-	}
+    if (level == NULL || target == NULL) {
+        return NULL;
+    }
 
     // Before we can spawn any starship, we must ensure we have enough memory allocated.
-	if (!EnsureStarshipCapacity(level, level->starshipCount + 1)) {
-		return NULL;
-	}
+    if (!EnsureStarshipCapacity(level, level->starshipCount + 1)) {
+        return NULL;
+    }
 
     // Now that we know we have enough memory, we can create the starship
     // and add it to the level's starship array.
     // See starship.c and starship.h for more details on starship creation.
-	Starship ship = CreateStarship(position, velocity, owner, target);
+    Starship ship = CreateStarship(position, velocity, owner, target);
 
     // We must add the ship to the Level's starship array,
     // to keep track of it, give it to a different variable
@@ -327,10 +327,10 @@ Starship *LevelSpawnStarship(Level *level, Vec2 position, Vec2 velocity, const F
     // and finally increment the starship count so our internal
     // memory management knows how much memory is actually in use
     // by starships and where the next free block of memory is.
-	level->starships[level->starshipCount] = ship;
-	Starship *stored = &level->starships[level->starshipCount];
-	level->starshipCount += 1;
-	return stored;
+    level->starships[level->starshipCount] = ship;
+    Starship *stored = &level->starships[level->starshipCount];
+    level->starshipCount += 1;
+    return stored;
 }
 
 /**
@@ -356,9 +356,9 @@ Starship *LevelSpawnStarship(Level *level, Vec2 position, Vec2 velocity, const F
  * @param index The index of the starship to remove.
  */
 void LevelRemoveStarship(Level *level, size_t index) {
-	if (level == NULL || index >= level->starshipCount) {
-		return;
-	}
+    if (level == NULL || index >= level->starshipCount) {
+        return;
+    }
 
     // To remove the starship at the given index,
     // we simply replace it with the last starship in the array
@@ -368,11 +368,11 @@ void LevelRemoveStarship(Level *level, size_t index) {
     // or freeing of internal resources.
     // Should any malloc'd or resource-owning members be added to the Starship struct in the future,
     // this function will need to be updated to properly release those resources
-	size_t last = level->starshipCount - 1;
-	if (index != last) {
-		level->starships[index] = level->starships[last];
-	}
-	level->starshipCount -= 1;
+    size_t last = level->starshipCount - 1;
+    if (index != last) {
+        level->starships[index] = level->starships[last];
+    }
+    level->starshipCount -= 1;
 }
 
 /**
@@ -387,34 +387,34 @@ void LevelRemoveStarship(Level *level, size_t index) {
  * @param deltaTime The time elapsed since the last update, in seconds.
  */
 void LevelUpdate(Level *level, float deltaTime) {
-	if (level == NULL) {
-		return;
-	}
+    if (level == NULL) {
+        return;
+    }
 
     // First we update all planets in the level.
-	for (size_t i = 0; i < level->planetCount; ++i) {
-		PlanetUpdate(&level->planets[i], deltaTime);
-	}
+    for (size_t i = 0; i < level->planetCount; ++i) {
+        PlanetUpdate(&level->planets[i], deltaTime);
+    }
 
-	// Next we update all trail effects in the level.
-	// While updating each trail effect, we also check if it is still alive.
-	// If a trail effect is no longer alive, we remove it from the level.
-	// Similar to starship removal, we replace dead trail effects with the last effect
-	// in the array and decrement the trail effect count.
-	size_t trailIndex = 0;
-	while (trailIndex < level->trailEffectCount) {
-		StarshipTrailEffect *effect = &level->trailEffects[trailIndex];
-		StarshipTrailEffectUpdate(effect, deltaTime);
-		if (!StarshipTrailEffectIsAlive(effect)) {
-			size_t last = level->trailEffectCount - 1;
-			if (trailIndex != last) {
-				level->trailEffects[trailIndex] = level->trailEffects[last];
-			}
-			level->trailEffectCount -= 1;
-			continue;
-		}
-		trailIndex += 1;
-	}
+    // Next we update all trail effects in the level.
+    // While updating each trail effect, we also check if it is still alive.
+    // If a trail effect is no longer alive, we remove it from the level.
+    // Similar to starship removal, we replace dead trail effects with the last effect
+    // in the array and decrement the trail effect count.
+    size_t trailIndex = 0;
+    while (trailIndex < level->trailEffectCount) {
+        StarshipTrailEffect *effect = &level->trailEffects[trailIndex];
+        StarshipTrailEffectUpdate(effect, deltaTime);
+        if (!StarshipTrailEffectIsAlive(effect)) {
+            size_t last = level->trailEffectCount - 1;
+            if (trailIndex != last) {
+                level->trailEffects[trailIndex] = level->trailEffects[last];
+            }
+            level->trailEffectCount -= 1;
+            continue;
+        }
+        trailIndex += 1;
+    }
 
     // And then we update all starships in the level.
     // While updating each starship, we also check for collisions with their target planets.
@@ -425,18 +425,18 @@ void LevelUpdate(Level *level, float deltaTime) {
     // and then we remove the starship from the level.
     // See starship and planet implementations for more details on the behavior
     // of their functions during updates and collisions.
-	size_t i = 0;
-	while (i < level->starshipCount) {
-		Starship *ship = &level->starships[i];
-		StarshipUpdate(ship, deltaTime);
-		if (StarshipCheckCollision(ship)) {
-			PlanetHandleIncomingShip(ship->target, ship);
-			LevelSpawnTrailEffect(level, ship);
-			LevelRemoveStarship(level, i);
-			continue;
-		}
-		++i;
-	}
+    size_t i = 0;
+    while (i < level->starshipCount) {
+        Starship *ship = &level->starships[i];
+        StarshipUpdate(ship, deltaTime);
+        if (StarshipCheckCollision(ship)) {
+            PlanetHandleIncomingShip(ship->target, ship);
+            LevelSpawnTrailEffect(level, ship);
+            LevelRemoveStarship(level, i);
+            continue;
+        }
+        ++i;
+    }
 }
 
 /**
@@ -446,7 +446,7 @@ void LevelUpdate(Level *level, float deltaTime) {
  * @return The ID of the faction, or -1 if the faction is NULL.
  */
 static int32_t ResolveFactionId(const Faction *faction) {
-	return (faction != NULL) ? (int32_t)faction->id : -1;
+    return (faction != NULL) ? (int32_t)faction->id : -1;
 }
 
 /**
@@ -460,19 +460,19 @@ static int32_t ResolveFactionId(const Faction *faction) {
  * @return The index of the planet in the level's planet array, or -1 if not found.
  */
 static int32_t ResolvePlanetIndex(const Level *level, const Planet *planet) {
-	// Basic validation of input pointers.
-	if (level == NULL || planet == NULL || level->planets == NULL) {
-		return -1;
-	}
+    // Basic validation of input pointers.
+    if (level == NULL || planet == NULL || level->planets == NULL) {
+        return -1;
+    }
 
-	// We assume that planets are stored in a contiguous array,
-	// so we can calculate the index by pointer arithmetic.
-	ptrdiff_t index = planet - level->planets;
-	if (index < 0 || (size_t)index >= level->planetCount) {
-		return -1;
-	}
+    // We assume that planets are stored in a contiguous array,
+    // so we can calculate the index by pointer arithmetic.
+    ptrdiff_t index = planet - level->planets;
+    if (index < 0 || (size_t)index >= level->planetCount) {
+        return -1;
+    }
 
-	return (int32_t)index;
+    return (int32_t)index;
 }
 
 /**
@@ -486,97 +486,97 @@ static int32_t ResolvePlanetIndex(const Level *level, const Planet *planet) {
  * @return true if the packet buffer was created successfully, false otherwise.
  */
 bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffer) {
-	// Basic validation of input pointers.
-	if (outBuffer == NULL) {
-		return false;
-	}
+    // Basic validation of input pointers.
+    if (outBuffer == NULL) {
+        return false;
+    }
 
-	// The outBuffer better start empty and free'd 
-	// as otherwise this line will leak memory.
-	outBuffer->data = NULL;
-	outBuffer->size = 0u;
+    // The outBuffer better start empty and free'd 
+    // as otherwise this line will leak memory.
+    outBuffer->data = NULL;
+    outBuffer->size = 0u;
 
-	// No point in continuing if level is NULL.
-	if (level == NULL) {
-		return false;
-	}
+    // No point in continuing if level is NULL.
+    if (level == NULL) {
+        return false;
+    }
 
-	// We need to know how many factions, planets, and starships we have
-	size_t factionCount = level->factionCount;
-	size_t planetCount = level->planetCount;
-	size_t starshipCount = level->starshipCount;
+    // We need to know how many factions, planets, and starships we have
+    size_t factionCount = level->factionCount;
+    size_t planetCount = level->planetCount;
+    size_t starshipCount = level->starshipCount;
 
-	// If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
-	// so we fail early.
-	if (factionCount > UINT32_MAX || planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
-		return false;
-	}
+    // If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
+    // so we fail early.
+    if (factionCount > UINT32_MAX || planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
+        return false;
+    }
 
-	// Now we can calculate the total size of the packet buffer we need to allocate.
-	// It's a simple sum of the sizes of the header and all the arrays,
-	// with each array itself simply being the count of elements times the size of each element.
-	size_t totalSize = sizeof(LevelFullPacket)
-		+ factionCount * sizeof(LevelPacketFactionInfo)
-		+ planetCount * sizeof(LevelPacketPlanetFullInfo)
-		+ starshipCount * sizeof(LevelPacketStarshipInfo);
+    // Now we can calculate the total size of the packet buffer we need to allocate.
+    // It's a simple sum of the sizes of the header and all the arrays,
+    // with each array itself simply being the count of elements times the size of each element.
+    size_t totalSize = sizeof(LevelFullPacket)
+        + factionCount * sizeof(LevelPacketFactionInfo)
+        + planetCount * sizeof(LevelPacketPlanetFullInfo)
+        + starshipCount * sizeof(LevelPacketStarshipInfo);
 
-	// This will be the buffer that holds all our packet data.
-	uint8_t *buffer = (uint8_t *)malloc(totalSize);
-	if (buffer == NULL) {
-		return false;
-	}
+    // This will be the buffer that holds all our packet data.
+    uint8_t *buffer = (uint8_t *)malloc(totalSize);
+    if (buffer == NULL) {
+        return false;
+    }
 
-	// Now that we have the buffer allocated, we can start filling it in.
-	// We start with the header.
-	LevelFullPacket *header = (LevelFullPacket *)buffer;
-	header->type = LEVEL_PACKET_TYPE_FULL;
-	header->width = level->width;
-	header->height = level->height;
-	header->factionCount = (uint32_t)factionCount;
-	header->planetCount = (uint32_t)planetCount;
-	header->starshipCount = (uint32_t)starshipCount;
+    // Now that we have the buffer allocated, we can start filling it in.
+    // We start with the header.
+    LevelFullPacket *header = (LevelFullPacket *)buffer;
+    header->type = LEVEL_PACKET_TYPE_FULL;
+    header->width = level->width;
+    header->height = level->height;
+    header->factionCount = (uint32_t)factionCount;
+    header->planetCount = (uint32_t)planetCount;
+    header->starshipCount = (uint32_t)starshipCount;
 
-	// Then we fill in the faction info array.
-	// We use a cursor to keep track of where we are in the buffer.
-	uint8_t *cursor = buffer + sizeof(LevelFullPacket);
-	LevelPacketFactionInfo *factionInfo = (LevelPacketFactionInfo *)cursor;
-	for (size_t i = 0; i < factionCount; ++i) {
-		factionInfo[i].id = (int32_t)level->factions[i].id;
-		for (size_t c = 0; c < 4; ++c) {
-			factionInfo[i].color[c] = level->factions[i].color[c];
-		}
-	}
+    // Then we fill in the faction info array.
+    // We use a cursor to keep track of where we are in the buffer.
+    uint8_t *cursor = buffer + sizeof(LevelFullPacket);
+    LevelPacketFactionInfo *factionInfo = (LevelPacketFactionInfo *)cursor;
+    for (size_t i = 0; i < factionCount; ++i) {
+        factionInfo[i].id = (int32_t)level->factions[i].id;
+        for (size_t c = 0; c < 4; ++c) {
+            factionInfo[i].color[c] = level->factions[i].color[c];
+        }
+    }
 
-	// Now we advance the cursor past the faction info array
-	// and fill in the planet info array.
-	cursor += factionCount * sizeof(LevelPacketFactionInfo);
-	LevelPacketPlanetFullInfo *planetInfo = (LevelPacketPlanetFullInfo *)cursor;
-	for (size_t i = 0; i < planetCount; ++i) {
-		const Planet *planet = &level->planets[i];
-		planetInfo[i].position = planet->position;
-		planetInfo[i].maxFleetCapacity = planet->maxFleetCapacity;
-		planetInfo[i].currentFleetSize = planet->currentFleetSize;
-		planetInfo[i].ownerId = ResolveFactionId(planet->owner);
-		planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
-	}
+    // Now we advance the cursor past the faction info array
+    // and fill in the planet info array.
+    cursor += factionCount * sizeof(LevelPacketFactionInfo);
+    LevelPacketPlanetFullInfo *planetInfo = (LevelPacketPlanetFullInfo *)cursor;
+    for (size_t i = 0; i < planetCount; ++i) {
+        const Planet *planet = &level->planets[i];
+        planetInfo[i].position = planet->position;
+        planetInfo[i].maxFleetCapacity = planet->maxFleetCapacity;
+        planetInfo[i].currentFleetSize = planet->currentFleetSize;
+        planetInfo[i].ownerId = ResolveFactionId(planet->owner);
+        planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
+    }
 
-	// Finally, we advance the cursor past the planet info array
-	// and fill in the starship info array.
-	cursor += planetCount * sizeof(LevelPacketPlanetFullInfo);
-	LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
-	for (size_t i = 0; i < starshipCount; ++i) {
-		const Starship *ship = &level->starships[i];
-		starshipInfo[i].position = ship->position;
-		starshipInfo[i].velocity = ship->velocity;
-		starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
-		starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
-	}
+    // Finally, we advance the cursor past the planet info array
+    // and fill in the starship info array.
+    cursor += planetCount * sizeof(LevelPacketPlanetFullInfo);
+    LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
+    for (size_t i = 0; i < starshipCount; ++i) {
+        const Starship *ship = &level->starships[i];
+        starshipInfo[i].position = ship->position;
+        starshipInfo[i].velocity = ship->velocity;
+        starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
+        starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
+    }
 
-	// We've filled in the entire buffer now,
-	// so we can set the outBuffer fields and return success.
-	outBuffer->data = buffer;
-	outBuffer->size = totalSize;
-	return true;
+    // We've filled in the entire buffer now,
+    // so we can set the outBuffer fields and return success.
+    outBuffer->data = buffer;
+    outBuffer->size = totalSize;
+    return true;
 }
 
 /**
@@ -590,77 +590,77 @@ bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffe
  * @return true if the packet buffer was created successfully, false otherwise.
  */
 bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outBuffer) {
-	// Basic validation of input pointers.
-	if (outBuffer == NULL) {
-		return false;
-	}
+    // Basic validation of input pointers.
+    if (outBuffer == NULL) {
+        return false;
+    }
 
-	// The outBuffer better start empty and free'd 
-	// as otherwise this line will leak memory.
-	outBuffer->data = NULL;
-	outBuffer->size = 0u;
+    // The outBuffer better start empty and free'd 
+    // as otherwise this line will leak memory.
+    outBuffer->data = NULL;
+    outBuffer->size = 0u;
 
-	// No point in continuing if level is NULL.
-	if (level == NULL) {
-		return false;
-	}
+    // No point in continuing if level is NULL.
+    if (level == NULL) {
+        return false;
+    }
 
-	// We need to know how many planets and starships we have
-	size_t planetCount = level->planetCount;
-	size_t starshipCount = level->starshipCount;
+    // We need to know how many planets and starships we have
+    size_t planetCount = level->planetCount;
+    size_t starshipCount = level->starshipCount;
 
-	// If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
-	if (planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
-		return false;
-	}
+    // If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
+    if (planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
+        return false;
+    }
 
-	// Now we can calculate the total size of the packet buffer we need to allocate.
-	// It's a simple sum of the sizes of the header and all the arrays,
-	// with each array itself simply being the count of elements times the size of each element.
-	size_t totalSize = sizeof(LevelSnapshotPacket)
-		+ planetCount * sizeof(LevelPacketPlanetSnapshotInfo)
-		+ starshipCount * sizeof(LevelPacketStarshipInfo);
+    // Now we can calculate the total size of the packet buffer we need to allocate.
+    // It's a simple sum of the sizes of the header and all the arrays,
+    // with each array itself simply being the count of elements times the size of each element.
+    size_t totalSize = sizeof(LevelSnapshotPacket)
+        + planetCount * sizeof(LevelPacketPlanetSnapshotInfo)
+        + starshipCount * sizeof(LevelPacketStarshipInfo);
 
-	// This will be the buffer that holds all our packet data.
-	uint8_t *buffer = (uint8_t *)malloc(totalSize);
-	if (buffer == NULL) {
-		return false;
-	}
+    // This will be the buffer that holds all our packet data.
+    uint8_t *buffer = (uint8_t *)malloc(totalSize);
+    if (buffer == NULL) {
+        return false;
+    }
 
-	// Now that we have the buffer allocated, we can start filling it in.
-	// We start with the header.
-	LevelSnapshotPacket *header = (LevelSnapshotPacket *)buffer;
-	header->type = LEVEL_PACKET_TYPE_SNAPSHOT;
-	header->planetCount = (uint32_t)planetCount;
-	header->starshipCount = (uint32_t)starshipCount;
+    // Now that we have the buffer allocated, we can start filling it in.
+    // We start with the header.
+    LevelSnapshotPacket *header = (LevelSnapshotPacket *)buffer;
+    header->type = LEVEL_PACKET_TYPE_SNAPSHOT;
+    header->planetCount = (uint32_t)planetCount;
+    header->starshipCount = (uint32_t)starshipCount;
 
-	// Then we fill in the planet snapshot info array.
-	uint8_t *cursor = buffer + sizeof(LevelSnapshotPacket);
-	LevelPacketPlanetSnapshotInfo *planetInfo = (LevelPacketPlanetSnapshotInfo *)cursor;
-	for (size_t i = 0; i < planetCount; ++i) {
-		const Planet *planet = &level->planets[i];
-		planetInfo[i].currentFleetSize = planet->currentFleetSize;
-		planetInfo[i].ownerId = ResolveFactionId(planet->owner);
-		planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
-	}
+    // Then we fill in the planet snapshot info array.
+    uint8_t *cursor = buffer + sizeof(LevelSnapshotPacket);
+    LevelPacketPlanetSnapshotInfo *planetInfo = (LevelPacketPlanetSnapshotInfo *)cursor;
+    for (size_t i = 0; i < planetCount; ++i) {
+        const Planet *planet = &level->planets[i];
+        planetInfo[i].currentFleetSize = planet->currentFleetSize;
+        planetInfo[i].ownerId = ResolveFactionId(planet->owner);
+        planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
+    }
 
-	// Finally, we advance the cursor past the planet info array
-	// and fill in the starship info array.
-	cursor += planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
-	LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
-	for (size_t i = 0; i < starshipCount; ++i) {
-		const Starship *ship = &level->starships[i];
-		starshipInfo[i].position = ship->position;
-		starshipInfo[i].velocity = ship->velocity;
-		starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
-		starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
-	}
+    // Finally, we advance the cursor past the planet info array
+    // and fill in the starship info array.
+    cursor += planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
+    LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
+    for (size_t i = 0; i < starshipCount; ++i) {
+        const Starship *ship = &level->starships[i];
+        starshipInfo[i].position = ship->position;
+        starshipInfo[i].velocity = ship->velocity;
+        starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
+        starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
+    }
 
-	// We've filled in the entire buffer now,
-	// so we can set the outBuffer fields and return success.
-	outBuffer->data = buffer;
-	outBuffer->size = totalSize;
-	return true;
+    // We've filled in the entire buffer now,
+    // so we can set the outBuffer fields and return success.
+    outBuffer->data = buffer;
+    outBuffer->size = totalSize;
+    return true;
 }
 
 /**
@@ -671,15 +671,15 @@ bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outB
  * @param buffer A pointer to the LevelPacketBuffer to release.
  */
 void LevelPacketBufferRelease(LevelPacketBuffer *buffer) {
-	// Basic validation of input pointer.
-	if (buffer == NULL) {
-		return;
-	}
+    // Basic validation of input pointer.
+    if (buffer == NULL) {
+        return;
+    }
 
-	// Free the packet data and reset the buffer fields.
-	// Buffer better not have been already released,
-	// as otherwise this line will double-free memory.
-	free(buffer->data);
-	buffer->data = NULL;
-	buffer->size = 0u;
+    // Free the packet data and reset the buffer fields.
+    // Buffer better not have been already released,
+    // as otherwise this line will double-free memory.
+    free(buffer->data);
+    buffer->data = NULL;
+    buffer->size = 0u;
 }

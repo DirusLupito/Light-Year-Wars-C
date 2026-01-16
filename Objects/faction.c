@@ -19,10 +19,10 @@
  * @param b The blue component (0.0 to 1.0).
  */
 static void SetColorComponents(float color[4], float r, float g, float b) {
-	color[0] = r;
-	color[1] = g;
-	color[2] = b;
-	color[3] = 1.0f;
+    color[0] = r;
+    color[1] = g;
+    color[2] = b;
+    color[3] = 1.0f;
 }
 
 /**
@@ -34,10 +34,10 @@ static void SetColorComponents(float color[4], float r, float g, float b) {
  * @return The created Faction object.
  */
 Faction CreateFaction(int id, float r, float g, float b) {
-	Faction faction;
-	faction.id = id;
-	SetColorComponents(faction.color, r, g, b);
-	return faction;
+    Faction faction;
+    faction.id = id;
+    SetColorComponents(faction.color, r, g, b);
+    return faction;
 }
 
 /**
@@ -48,9 +48,9 @@ Faction CreateFaction(int id, float r, float g, float b) {
  * @param b The blue component of the faction's color (0.0 to 1.0).
  */
 void FactionSetColor(Faction *faction, float r, float g, float b) {
-	if (faction == NULL) {
-		return;
-	}
+    if (faction == NULL) {
+        return;
+    }
 
-	SetColorComponents(faction->color, r, g, b);
+    SetColorComponents(faction->color, r, g, b);
 }

@@ -85,12 +85,12 @@ static bool HandleFullPacket(const uint8_t *data, size_t length) {
 
     // The packet order can be observed from the struct:
     // typedef struct LevelFullPacket {
-    	// uint32_t type;
-    	// float width;
-    	// float height;
-    	// uint32_t factionCount;
-    	// uint32_t planetCount;
-    	// uint32_t starshipCount;
+        // uint32_t type;
+        // float width;
+        // float height;
+        // uint32_t factionCount;
+        // uint32_t planetCount;
+        // uint32_t starshipCount;
     // } LevelFullPacket;
     // So after the header, we have factions, then planets, then starships.
     // #pragma pack(push, 1) and #pragma pack(pop) ensure there is no padding in these structs,
@@ -192,9 +192,9 @@ static void HandleSnapshotPacket(const uint8_t *data, size_t length) {
     // And we also reuse the same cursor technique to parse the packet contents.
     // The packet order can be observed from the struct:
     // typedef struct LevelSnapshotPacket {
-    // 	uint32_t type;
-    // 	uint32_t planetCount;
-    // 	uint32_t starshipCount;
+    // uint32_t type;
+    // uint32_t planetCount;
+    // uint32_t starshipCount;
     // } LevelSnapshotPacket;
     // So after the header, we have planets, then starships.
     const uint8_t *cursor = data + sizeof(LevelSnapshotPacket);

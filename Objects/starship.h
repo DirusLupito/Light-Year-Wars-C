@@ -50,17 +50,17 @@ struct Planet;
 // A starship trail sample represents a single point in the starship's trail.
 // It contains the position of the sample and its age in seconds.
 typedef struct StarshipTrailSample {
-	Vec2 position;
-	float age;
+    Vec2 position;
+    float age;
 } StarshipTrailSample;
 
 // A starship trail effect represents the visual trail left behind by a starship.
 // It contains an array of trail samples, the count of valid samples,
 // and the color used for rendering the trail.
 typedef struct StarshipTrailEffect {
-	StarshipTrailSample samples[STARSHIP_TRAIL_MAX_SAMPLES];
-	size_t sampleCount;
-	float color[4];
+    StarshipTrailSample samples[STARSHIP_TRAIL_MAX_SAMPLES];
+    size_t sampleCount;
+    float color[4];
 } StarshipTrailEffect;
 
 // A starship represents a unit that can be sent from one planet to another.
@@ -72,13 +72,13 @@ typedef struct StarshipTrailEffect {
 // Upon reaching its target planet, the starship will be considered to have collided with it.
 // See planet.c's PlanetHandleIncomingShip function for handling the effects of a starship arriving at a planet.
 typedef struct Starship {
-	Vec2 position;
-	Vec2 velocity;
-	const Faction *owner;
-	struct Planet *target;
-	size_t trailCount;
-	float trailTimeSinceLastEmit;
-	StarshipTrailSample trail[STARSHIP_TRAIL_MAX_SAMPLES];
+    Vec2 position;
+    Vec2 velocity;
+    const Faction *owner;
+    struct Planet *target;
+    size_t trailCount;
+    float trailTimeSinceLastEmit;
+    StarshipTrailSample trail[STARSHIP_TRAIL_MAX_SAMPLES];
 } Starship;
 
 /**

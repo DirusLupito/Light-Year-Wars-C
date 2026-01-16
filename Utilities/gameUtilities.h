@@ -43,12 +43,12 @@ int64_t GetTickFrequency();
  * @return true if the level was generated successfully, false otherwise.
  */
 bool GenerateRandomLevel(Level *level,
-	size_t planetCount,
-	size_t factionCount,
-	float minFleetCapacity,
-	float maxFleetCapacity,
-	float width,
-	float height,
-	unsigned int seed);
+    size_t planetCount,
+    size_t factionCount,
+    float minFleetCapacity,
+    float maxFleetCapacity,
+    float width,
+    float height,
+    unsigned int seed);
 
 #endif // _GAME_UTILITIES_H_
