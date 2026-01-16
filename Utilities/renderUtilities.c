@@ -338,3 +338,32 @@ void DrawFeatheredFilledInCircle(float cx, float cy, float radius, float feather
     DrawRadialGradientRing(cx, cy, innerRadius, radius, segments, innerColor, outerColor);
     glDisable(GL_BLEND);
 }
+
+/**
+ * Draws a radial background gradient.
+ * @param width The width of the area to draw the gradient in.
+ * @param height The height of the area to draw the gradient in.
+ */
+void DrawBackgroundGradient(int width, int height) {
+    // Basic validation of input dimensions.
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    // Calculate center and radius for the gradient
+    float centerX = (float)width * 0.5f;
+    float centerY = (float)height * 0.5f;
+    float halfWidth = (float)width * 0.5f;
+    float halfHeight = (float)height * 0.5f;
+    float radius = sqrtf(halfWidth * halfWidth + halfHeight * halfHeight) * 1.05f;
+
+    // Enable blending for smooth transparency transitions.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    DrawRadialGradientRing(centerX, centerY, 0.0f, radius, 128,
+        (float[4])BACKGROUND_GRADIENT_INNER_COLOR, (float[4])BACKGROUND_GRADIENT_OUTER_COLOR);
+
+    // Disable blending after drawing the gradient.
+    glDisable(GL_BLEND);
+}

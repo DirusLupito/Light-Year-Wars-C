@@ -24,8 +24,17 @@
 // Type value for a full level packet
 #define LEVEL_PACKET_TYPE_FULL 1u
 
-// Type value for a level snapshot packet
+// Type value for a planet snapshot packet (planets only)
 #define LEVEL_PACKET_TYPE_SNAPSHOT 2u
+
+// Type value for a player assignment packet (server -> client)
+#define LEVEL_PACKET_TYPE_ASSIGNMENT 3u
+
+// Type value for a move order packet (client -> server)
+#define LEVEL_PACKET_TYPE_MOVE_ORDER 4u
+
+// Type value for a fleet launch packet (server -> clients)
+#define LEVEL_PACKET_TYPE_FLEET_LAUNCH 5u
 
 // Definitions of packet structures used for network transmission.
 // We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
@@ -88,15 +97,42 @@ typedef struct LevelFullPacket {
     uint32_t starshipCount;
 } LevelFullPacket;
 
-// A LevelSnapshotPacket represents the header of a level snapshot packet.
-// It contains the type and counts of planets and starships.
-// It should be followed by arrays of planet snapshot info and starship info
-// in that order to communicate the dynamic state of the level.
+// A LevelSnapshotPacket represents the header of a planet snapshot packet.
+// It contains the type and count of planets whose ownership/fleet data follow.
+// It is followed by an array of LevelPacketPlanetSnapshotInfo structures.
 typedef struct LevelSnapshotPacket {
     uint32_t type;
     uint32_t planetCount;
-    uint32_t starshipCount;
 } LevelSnapshotPacket;
+
+// A LevelFleetLaunchPacket communicates a fleet launch initiated on the server.
+// It includes the origin and destination planet indices along with the number of
+// ships that should be spawned by clients to mirror the authoritative action.
+typedef struct LevelFleetLaunchPacket {
+    uint32_t type;
+    int32_t originPlanetIndex;
+    int32_t destinationPlanetIndex;
+    int32_t shipCount;
+    int32_t ownerFactionId;
+} LevelFleetLaunchPacket;
+
+// A LevelAssignmentPacket communicates the faction assigned to a player.
+// The server sends this after a successful join so the client knows which
+// faction they control.
+typedef struct LevelAssignmentPacket {
+    uint32_t type;
+    int32_t factionId;
+} LevelAssignmentPacket;
+
+// A LevelMoveOrderPacket communicates a set of origin planets and a destination
+// planet for fleet movement requests. It is sent by clients to the server.
+// The packet is followed by originCount 32-bit planet indices.
+typedef struct LevelMoveOrderPacket {
+    uint32_t type;
+    uint32_t originCount;
+    int32_t destinationPlanetIndex;
+    int32_t originPlanetIndices[];
+} LevelMoveOrderPacket;
 #pragma pack(pop)
 
 // A LevelPacketBuffer holds a pointer to packet data and its size.
@@ -232,7 +268,8 @@ bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffe
 /**
  * Creates a level snapshot packet buffer for network transmission.
  * This function allocates memory for the packet buffer and fills it with
- * the dynamic state of the level, including planets and starships.
+ * the dynamic state of the level relevant to planets (ownership, fleets).
+ * Starships are intentionally excluded so clients can simulate them locally.
  * The caller is responsible for releasing the packet buffer using
  * LevelPacketBufferRelease when done.
  * @param level A pointer to the Level object.
@@ -249,5 +286,28 @@ bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outB
  * @param buffer A pointer to the LevelPacketBuffer to release.
  */
 void LevelPacketBufferRelease(LevelPacketBuffer *buffer);
+
+/**
+ * Applies a full level packet to the provided Level instance.
+ * This populates factions, planets, and starships based on the packet data.
+ * Existing data in the level is replaced. The level must have been initialized.
+ * @param level A pointer to the Level object to populate.
+ * @param data A pointer to the packet data buffer.
+ * @param size Size of the packet data buffer in bytes.
+ * @return true if the packet was applied successfully, false otherwise.
+ */
+bool LevelApplyFullPacket(Level *level, const void *data, size_t size);
+
+/**
+ * Applies a snapshot packet to the provided Level instance.
+ * Static level data (positions, faction colors, etc.) must already be present.
+ * Dynamic fields such as planet ownership, fleet sizes, and starships are
+ * overwritten with the data from the snapshot.
+ * @param level A pointer to the Level object to update.
+ * @param data A pointer to the packet data buffer.
+ * @param size Size of the packet data buffer in bytes.
+ * @return true if the packet was applied successfully, false otherwise.
+ */
+bool LevelApplySnapshot(Level *level, const void *data, size_t size);
 
 #endif // _LEVEL_H_

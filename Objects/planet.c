@@ -417,7 +417,8 @@ bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
 
     // Determine the number of starships to send.
     // We round the current fleet size to the nearest integer.
-    int shipCount = (int)floorf(origin->currentFleetSize + 0.5f);
+    // If no ships are available, we cannot send a fleet, so we return false.
+    int shipCount = (int)floorf(origin->currentFleetSize);
     if (shipCount <= 0) {
         return false;
     }
@@ -427,6 +428,55 @@ bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
     origin->currentFleetSize = 0.0f;
 
     // Actually spawn the starship objects into the level.
+    SpawnShipCircle(level, origin, destination, shipCount);
+    return true;
+}
+
+/**
+ * Simulates sending a fleet from the origin planet to the destination planet.
+ * This function is similar to PlanetSendFleet but allows specifying the number of starships
+ * to send and an optional owner override for the spawned starships.
+ * This is useful for simulating fleet launches without altering the origin planet's state,
+ * as the server and clients no longer need to tell each other about all the starships being sent,
+ * and can instead just agree on the fleet launch event, then due to the deterministic nature of the starship spawning,
+ * they can each simulate the same starship spawns independently.
+ * @param origin A pointer to the origin Planet object.
+ * @param destination A pointer to the destination Planet object.
+ * @param level A pointer to the Level object where starships will be spawned.
+ * @param shipCount The number of starships to send.
+ * @param ownerOverride An optional pointer to the Faction that will own the spawned starships.
+ *                      If NULL, the origin planet's owner will be used.
+ * @return true if the fleet was successfully simulated, false otherwise.
+ */
+bool PlanetSimulateFleetLaunch(Planet *origin, Planet *destination, Level *level,
+    int shipCount, const Faction *ownerOverride) {
+    // Basic validation of parameters.
+    if (origin == NULL || destination == NULL || level == NULL) {
+        return false;
+    }
+
+    if (origin == destination || shipCount <= 0) {
+        return false;
+    }
+
+    // Determine the owner for the spawned starships.
+    const Faction *owner = ownerOverride != NULL ? ownerOverride : origin->owner;
+    if (owner == NULL) {
+        return false;
+    }
+
+    // If the origin planet has no owner, we simulate that it becomes owned by the
+    // ownerOverride faction upon launching the fleet.
+    // This way, if a client has seriously lagged behind and the planet was unowned for them,
+    // they can still correctly simulate the fleet launch as intended by the server,
+    // and somewhat more accurately reflect the level's state (at least, that's the idea).
+    if (origin->owner == NULL) {
+        origin->owner = owner;
+    }
+
+    // Analogous to PlanetSendFleet, we reduce the origin planet's fleet size to 0.0f
+    // since we are sending all available ships.
+    origin->currentFleetSize = 0.0f;
     SpawnShipCircle(level, origin, destination, shipCount);
     return true;
 }

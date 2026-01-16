@@ -28,6 +28,18 @@ typedef struct {
 // Maximum number of segments to use when drawing circles to avoid excessive detail.
 #define MAX_CIRCLE_SEGMENTS 256
 
+// Color of the background (RGBA)
+#define BACKGROUND_COLOR_R 0.3f
+#define BACKGROUND_COLOR_G 0.25f
+#define BACKGROUND_COLOR_B 0.29f
+#define BACKGROUND_COLOR_A 1.0f
+
+// Controls the maximum brightness observed at the center of the radial gradient.
+#define BACKGROUND_GRADIENT_INNER_COLOR {0.36f, 0.30f, 0.43f, 1.0f}
+
+// Controls the base color at the outer edge of the radial gradient.
+#define BACKGROUND_GRADIENT_OUTER_COLOR {BACKGROUND_COLOR_R, BACKGROUND_COLOR_G, BACKGROUND_COLOR_B, 1.0f}
+
 
 /**
  * Draws a hollow circle using OpenGL.
@@ -110,5 +122,12 @@ void DrawFeatheredFilledInCircle(float cx, float cy, float radius, float feather
  * @return The computed number of segments for the circle.
  */
 int ComputeCircleSegments(float radius);
+
+/**
+ * Draws a radial background gradient.
+ * @param width The width of the area to draw the gradient in.
+ * @param height The height of the area to draw the gradient in.
+ */
+void DrawBackgroundGradient(int width, int height);
 
 #endif // _RENDER_UTILITIES_H_

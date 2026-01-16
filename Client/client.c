@@ -1,411 +1,890 @@
 /**
  * Companion client for Light Year Wars C.
- * Sends greetings to the server and waits for "Ok".
+ * Implements the client-side logic, rendering, and user interaction.
  * @author abmize
  * @file client.c
  */
 #include "Client/client.h"
+#include "Utilities/openglUtilities.h"
+#include "Utilities/playerInterfaceUtilities.h"
 
-// Forward declarations of static functions
-static bool HandleFullPacket(const uint8_t *data, size_t length);
-static void HandleSnapshotPacket(const uint8_t *data, size_t length);
+// ---- Global variables ----
+
+// -- Window and rendering variables --
+
+// Running = true while the main loop should continue
+// Otherwise if false, the application will exit.
+static bool running = true;
+
+// Aggregated OpenGL resources shared by the server window.
+static OpenGLContext openglContext = {0};
+
+// -- Networking variables --
+
+// UDP socket used for communication with the server
+// Will be INVALID_SOCKET if not initialized.
+static SOCKET clientSocket = INVALID_SOCKET;
+
+// Server address information.
+// Will be valid if serverAddressValid is true.
+static SOCKADDR_IN serverAddress;
+
+// Indicates whether the serverAddress variable contains a valid address.
+static bool serverAddressValid = false;
+
+// Buffer for receiving data from the server.
+// Size is arbitrary but should be large enough to hold expected packets.
+static char recv_buffer[2048];
+
+// -- Game state variables --
+
+// Current level state.
+static Level level;
+
+// Indicates whether the level has been fully initialized
+// with a full packet from the server.
+// If false, the level is not ready for simulation or rendering,
+// and the client should wait for a packet detailing the full state of the level.
+static bool levelInitialized = false;
+
+// Indicates whether the client is currently awaiting a full packet
+// from the server to (re)initialize the level state.
+static bool awaitingFull = true;
+
+// ID of the faction assigned to this client by the server.
+// Will be -1 if no faction has been assigned yet.
+static int32_t assignedFactionId = -1;
+
+// Pointer to the faction object representing the client's local faction.
+// Will be NULL if no faction is assigned or if the level is not initialized.
+static const Faction *localFaction = NULL;
+
+// Tracks the player's current planet selection state.
+static PlayerSelectionState selectionState = {0};
+
+// -- Timing variables --
+
+// Previous tick count used for calculating delta time between frames.
+static int64_t previousTicks = 0;
+
+// Frequency of the high-resolution performance counter.
+// Used to convert tick counts to seconds.
+static int64_t tickFrequency = 1;
+
+// Forward declarations of static functions.
+
+static LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wParam, LPARAM lParam);
+static void DrawSelectionHighlights(void);
+static Planet *PickPlanetAt(Vec2 position, size_t *outIndex);
+static void RefreshLocalFaction(void);
+static void HandleFullPacketMessage(const uint8_t *data, size_t length);
+static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length);
+static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length);
+static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length);
+static const Faction *ResolveFactionById(int32_t factionId);
+static void ProcessNetworkMessages(void);
+static void SendJoinRequest(void);
+static bool PromptForServerAddress(void);
+static void RenderFrame(float fps);
 
 /**
- * Helper function to validate that the remaining packet length
- * is at least the expected size. Used to prevent reading beyond packet bounds.
- * @param length The remaining length of the packet.
- * @param expected The expected minimum size.
- * @return true if the remaining length is sufficient, false otherwise.
+ * Helper function to draw selection highlights
+ * around planets selected by the player.
  */
-static bool ValidateRemaining(size_t length, size_t expected) {
-    // Simple check, just use the size_t comparison.
-    if (length < expected) {
-        printf("Packet truncated (expected %zu bytes, got %zu).\n", expected, length);
+static void DrawSelectionHighlights(void) {
+    // If the level is not initialized or there is no selection state, do nothing.
+    if (!levelInitialized || selectionState.selectedPlanets == NULL) {
+        return;
+    }
+
+    // Draw a white, semi-transparent ring around each selected planet.
+    float highlightColor[4] = {1.0f, 1.0f, 1.0f, 0.85f};
+
+    // Limit the count to the smaller of planetCount and selectionState.capacity.
+    // selectionState.capacity should always be equal to planetCount,
+    // but this check ensures we don't read out of bounds.
+    size_t count = level.planetCount < selectionState.capacity ? level.planetCount : selectionState.capacity;
+
+    // Iterate through all planets and draw highlights for selected ones.
+    for (size_t i = 0; i < count; ++i) {
+        if (!selectionState.selectedPlanets[i]) {
+            continue;
+        }
+
+        float radius = PlanetGetOuterRadius(&level.planets[i]);
+        DrawFeatheredRing(level.planets[i].position.x, level.planets[i].position.y,
+            radius + 2.0f, radius + 5.0f, 1.2f, highlightColor);
+    }
+}
+
+/**
+ * Helper function to pick a planet at the given position.
+ * Used for mouse picking. Will find the first planet whose outer radius
+ * contains the given position.
+ * @param position The position to check for a planet.
+ * @param outIndex Optional output parameter to receive the index of the 
+ *                 picked planet in the level's planet array.
+ * @return Pointer to the picked Planet, or NULL if none found.
+ */
+static Planet *PickPlanetAt(Vec2 position, size_t *outIndex) {
+    // No level, no planets.
+    if (!levelInitialized) {
+        return NULL;
+    }
+
+    // Simple approach which is fast enough as there will be bigger issues
+    // with performance before this becomes a bottleneck: just iterate all planets
+    // and check distance between the position and the planet center.
+    for (size_t i = 0; i < level.planetCount; ++i) {
+        Vec2 diff = Vec2Subtract(position, level.planets[i].position);
+        float dist = Vec2Length(diff);
+
+        // The outer radius is the biggest visible part of the planet,
+        // so if the distance is less than that, we've clicked on the planet.
+        if (dist < PlanetGetOuterRadius(&level.planets[i])) {
+
+            // If requested, output the index of the picked planet.
+            if (outIndex != NULL) {
+                *outIndex = i;
+            }
+            return &level.planets[i];
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Helper function to resolve a faction by its ID.
+ * Searches the current level's factions for a matching ID.
+ * @param factionId The ID of the faction to find.
+ * @return Pointer to the Faction if found, NULL otherwise.
+ */
+static const Faction *ResolveFactionById(int32_t factionId) {
+    // If the level is not initialized or has no factions, cannot resolve.
+    if (!levelInitialized || level.factions == NULL) {
+        return NULL;
+    }
+
+    // Search through the factions to find one with the matching ID.
+    for (size_t i = 0; i < level.factionCount; ++i) {
+        if (level.factions[i].id == factionId) {
+            return &level.factions[i];
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Helper function to refresh the local faction pointer
+ * based on the assigned faction ID and current level state.
+ * Used whenever the level is initialized or the assignment changes.
+ */
+static void RefreshLocalFaction(void) {
+    localFaction = NULL;
+    if (!levelInitialized || assignedFactionId < 0) {
+        return;
+    }
+
+    localFaction = ResolveFactionById(assignedFactionId);
+}
+
+/**
+ * Handles a full packet message received from the server.
+ * Applies the full level state contained in the packet.
+ * Will fill in the level structure and mark it as initialized.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
+    // Delegate to LevelApplyFullPacket to handle the actual data.
+    if (!LevelApplyFullPacket(&level, data, length)) {
+        printf("Failed to apply full packet.\n");
+        return;
+    }
+
+    // Mark the level as initialized and reset selection state,
+    // in case of a reinitialization.
+    levelInitialized = true;
+    awaitingFull = false;
+
+    // Reset the player's selection state in case they
+    // had any selections prior to the full packet.
+    PlayerSelectionReset(&selectionState, level.planetCount);
+    RefreshLocalFaction();
+}
+
+/**
+ * Handles a snapshot packet message received from the server.
+ * Applies the snapshot data to update the current level state.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length) {
+    // If the level is not initialized, cannot apply a snapshot.
+    if (!levelInitialized) {
+        return;
+    }
+
+    // Delegate to LevelApplySnapshot to handle the actual data.
+    if (!LevelApplySnapshot(&level, data, length)) {
+        printf("Failed to apply snapshot packet.\n");
+        awaitingFull = true;
+        return;
+    }
+
+    // We successfully applied the snapshot,
+    // make sure that the local faction pointer is up to date.
+    RefreshLocalFaction();
+}
+
+/**
+ * Handles an assignment packet message received from the server.
+ * An assignment packet assigns a faction to the client.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length) {
+    // If the level is not initialized, we can still process the assignment.
+    if (length < sizeof(LevelAssignmentPacket)) {
+        return;
+    }
+
+    // Cast the data to a LevelAssignmentPacket and extract the faction ID.
+    const LevelAssignmentPacket *packet = (const LevelAssignmentPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_ASSIGNMENT) {
+        return;
+    }
+
+    // Update the assigned faction ID and refresh the local faction pointer.
+    assignedFactionId = packet->factionId;
+    RefreshLocalFaction();
+}
+
+/**
+ * Handles a fleet launch packet message received from the server.
+ * Processes the fleet launch information and updates the level state.
+ * Allows clients to simulate fleet launches initiated by other players,
+ * without needing to receive any information about the starships themselves.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length) {
+    // Basic validation of input parameters.
+    if (!levelInitialized || data == NULL) {
+        return;
+    }
+
+    if (length < sizeof(LevelFleetLaunchPacket)) {
+        return;
+    }
+
+    // Cast the data to a LevelFleetLaunchPacket and extract the information.
+    const LevelFleetLaunchPacket *packet = (const LevelFleetLaunchPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_FLEET_LAUNCH) {
+        return;
+    }
+
+    // Extract launch details from the packet.
+    int32_t originIndex = packet->originPlanetIndex;
+    int32_t destinationIndex = packet->destinationPlanetIndex;
+    int32_t shipCount = packet->shipCount;
+
+    // Validate the extracted launch details.
+    if (originIndex < 0 || destinationIndex < 0 || shipCount <= 0) {
+        return;
+    }
+
+    if ((size_t)originIndex >= level.planetCount || (size_t)destinationIndex >= level.planetCount) {
+        return;
+    }
+
+    // Figure out the origin and destination planets in terms of this client's level state.
+    Planet *origin = &level.planets[originIndex];
+    Planet *destination = &level.planets[destinationIndex];
+
+    // Determine the owner faction for the launched fleet.
+    const Faction *owner = ResolveFactionById(packet->ownerFactionId);
+    if (owner == NULL) {
+        owner = origin->owner;
+    }
+
+    // Simulate the fleet launch on the client side.
+    if (!PlanetSimulateFleetLaunch(origin, destination, &level, shipCount, owner)) {
+        return;
+    }
+}
+
+/**
+ * Processes incoming network messages from the server.
+ * Handles different packet types and updates the level state accordingly.
+ */
+static void ProcessNetworkMessages(void) {
+    // If the client socket is not valid, there is nothing to process.
+    if (clientSocket == INVALID_SOCKET) {
+        return;
+    }
+
+    // Continuously receive packets until there are no more to process.
+    // for (;;) loop will break when there are no more packets.
+    for (;;) {
+        // Receive data from the server.
+        SOCKADDR_IN fromAddress;
+
+        // Figure out the size of the fromAddress structure.
+        int fromLength = sizeof(fromAddress);
+
+        // Receive data into the recv_buffer.
+        int received = recvfrom(clientSocket,
+            recv_buffer,
+            (int)sizeof(recv_buffer),
+            0,
+            (struct sockaddr *)&fromAddress,
+            &fromLength);
+
+        // In case of an error, break the loop.
+        // This could include WSAEWOULDBLOCK, which
+        // should means that there are no more packets to read.
+        // Other errors could indicate a real problem, and are thus logged.
+        if (received == SOCKET_ERROR) {
+            int error = WSAGetLastError();
+            if (error != WSAEWOULDBLOCK) {
+                printf("recvfrom failed: %d\n", error);
+            }
+            break;
+        }
+
+        // If no data was received, continue to the next iteration.
+        if (received == 0) {
+            continue;
+        }
+
+        // If a server address is set, ignore packets from other addresses.
+        if (serverAddressValid && fromAddress.sin_addr.s_addr != serverAddress.sin_addr.s_addr) {
+            continue;
+        }
+
+        // If the received data is smaller than a uint32_t,
+        // we cannot determine the packet type.
+        // That is because we assume the first 4 bytes of every packet
+        // contains the packet type as a uint32_t.
+        if (received < (int)sizeof(uint32_t)) {
+            int capped = received < (int)sizeof(recv_buffer) - 1 ? received : (int)sizeof(recv_buffer) - 1;
+            recv_buffer[capped] = '\0';
+            printf("Server: %s\n", recv_buffer);
+            continue;
+        }
+
+        // Extract the packet type from the beginning of the received data.
+        uint32_t packetType = 0;
+        memcpy(&packetType, recv_buffer, sizeof(uint32_t));
+        const uint8_t *payload = (const uint8_t *)recv_buffer;
+        size_t payloadSize = (size_t)received;
+
+        // Delegate handling based on the packet type.
+        if (packetType == LEVEL_PACKET_TYPE_FULL) {
+            HandleFullPacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_SNAPSHOT) {
+            HandleSnapshotPacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_ASSIGNMENT) {
+            HandleAssignmentPacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_FLEET_LAUNCH) {
+            HandleFleetLaunchPacketMessage(payload, payloadSize);
+        } else {
+            printf("Unknown packet type %u (%d bytes).\n", packetType, received);
+        }
+    }
+}
+
+/**
+ * Sends a join request to the server.
+ * This is used to request joining the game session.
+ * Upon receiving a join request, the server should respond
+ * with a full level packet and an assignment packet.
+ */
+static void SendJoinRequest(void) {
+    // If the server address is not valid or the client socket is not valid, do nothing.
+    if (!serverAddressValid || clientSocket == INVALID_SOCKET) {
+        return;
+    }
+
+    // Prepare and send the join request message.
+    // For now, this is a simple text message "JOIN",
+    // with the client's IP also implicitly known on the server side
+    // from the source address of the received packet.
+    const char *joinMessage = "JOIN";
+    int result = sendto(clientSocket,
+        joinMessage,
+        (int)strlen(joinMessage),
+        0,
+        (struct sockaddr *)&serverAddress,
+        (int)sizeof(serverAddress));
+
+    // Report any send errors.
+    if (result == SOCKET_ERROR) {
+        printf("sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Prompts the user for the server IP address and port.
+ * Allocates a console window for input/output if necessary.
+ * @return true if a valid address was provided, false otherwise.
+ */
+static bool PromptForServerAddress(void) {
+
+    // Check if we need to allocate a console.
+    if (GetConsoleWindow() == NULL) {
+        // If so, we try to allocate one.
+        if (!AllocConsole()) {
+            printf("AllocConsole failed.\n");
+            return false;
+        }
+    }
+
+    // Redirect standard input and output to the console (freopen = "file reopen").
+    // Will make stdin and stdout point to the console window.
+    FILE *consoleIn = freopen("CONIN$", "r", stdin);
+    FILE *consoleOut = freopen("CONOUT$", "w", stdout);
+
+    // Disable output buffering for the console output.
+    // Helps ensure that printf output appears immediately.
+    (void)consoleIn;
+    if (consoleOut != NULL) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+    }
+
+    // Prompt the user for IP address and port.
+    char ip[INET_ADDRSTRLEN] = {0};
+    int port = 0;
+
+    // An ip address is at most 15 characters long (xxx.xxx.xxx.xxx) plus null terminator.
+    printf("Enter server IP address: ");
+    if (scanf("%15s", ip) != 1) {
         return false;
     }
+
+    // Prompt for port number (should be no more than 2^16-1 = 65535).
+    printf("Enter server port: ");
+    if (scanf("%d", &port) != 1) {
+        return false;
+    }
+
+    // Try to create the server address structure.
+    if (!CreateAddress(ip, port, &serverAddress)) {
+        return false;
+    }
+
+    // We have a valid server address now, so mark it as such.
+    serverAddressValid = true;
     return true;
 }
 
 /**
- * Handles a full level packet received from the server.
- * Parses and prints the contents of the packet.
- * For reference, a full level packet is one that contains
- * all the data about the level, including factions, planets, and starships.
- * Compaed to a snapshot packet, this is a super-set of data,
- * since a snapshot only contains the dynamic state of planets and starships.
- * (Planets don't move, or change their max size, factions don't change color, etc.)
- * @param data Pointer to the packet data.
- * @param length Length of the packet data in bytes.
- * @return true if the packet was handled successfully, false otherwise.
+ * Renders a single frame of the client.
+ * Draws the background, planets, starships, trails, and UI elements.
+ * @param fps The current frames per second, used for the FPS display.
  */
-static bool HandleFullPacket(const uint8_t *data, size_t length) {
-
-    // First we validate that the packet is large enough to hold the header.
-    // We need at least the header to proceed.
-    if (length < sizeof(LevelFullPacket)) {
-        printf("Full packet smaller than header.\n");
-        return false;
+static void RenderFrame(float fps) {
+    // If OpenGL is not initialized, do nothing.
+    if (!openglContext.deviceContext || !openglContext.renderContext) {
+        return;
     }
 
-    // Now we can safely cast the data pointer to our header structure.
-    const LevelFullPacket *header = (const LevelFullPacket *)data;
+    // Clear the screen to the background color.
+    glClearColor(BACKGROUND_COLOR_R, BACKGROUND_COLOR_G, BACKGROUND_COLOR_B, BACKGROUND_COLOR_A);
+    glClear(GL_COLOR_BUFFER_BIT);
 
-    // Let's verify that the packet type is what we expect.
-    if (header->type != LEVEL_PACKET_TYPE_FULL) {
-        printf("Unexpected packet type %u for full handler.\n", header->type);
-        return false;
+    // Reset the modelview matrix.
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // If we have a valid window size, draw the game elements.
+    if (openglContext.width > 0 && openglContext.height > 0) {
+        // Add a soft glow gradient to the background.
+        DrawBackgroundGradient(openglContext.width, openglContext.height);
+
+        // If the level is initialized, draw the planets, starships, and starship trails.
+        if (levelInitialized) {
+
+            // Draw each planet in the level.
+            for (size_t i = 0; i < level.planetCount; ++i) {
+                PlanetDraw(&level.planets[i]);
+            }
+
+            // Draw selection highlights around selected planets.
+            DrawSelectionHighlights();
+
+            // Draw each starship trail effect.
+            for (size_t i = 0; i < level.trailEffectCount; ++i) {
+                StarshipTrailEffectDraw(&level.trailEffects[i]);
+            }
+
+            // Draw each starship in the level.
+            for (size_t i = 0; i < level.starshipCount; ++i) {
+                StarshipDraw(&level.starships[i]);
+            }
+        }
     }
 
-    // Since we've been told by the header that we're getting a full packet,
-    // we can now read the counts of factions, planets, and starships.
-    size_t factionCount = header->factionCount;
-    size_t planetCount = header->planetCount;
-    size_t starshipCount = header->starshipCount;
+    // Draw the FPS, faction ID, and selection count in the top-left corner.
+    if (openglContext.fontDisplayListBase && openglContext.width >= 10 && openglContext.height >= 10) {
+        // Line 1, topmost: FPS
+        char line1[64];
 
-    // Memory size required to store the entire packet is a simple formula,
-    // we just multiply the counts of each object factions, planets, and starships
-    // by their respective sizes and then add this all up along with the header size.
-    size_t required = sizeof(LevelFullPacket)
-        + factionCount * sizeof(LevelPacketFactionInfo)
-        + planetCount * sizeof(LevelPacketPlanetFullInfo)
-        + starshipCount * sizeof(LevelPacketStarshipInfo);
+        // Line 2, middle: Faction ID
+        char line2[64];
 
-    // Now we perform another check in case of any network chicanery
-    // that would cause us to read beyond the packet bounds.
-    if (!ValidateRemaining(length, required)) {
-        return false;
+        // Line 3, bottom: Number of selected planets
+        char line3[64];
+        snprintf(line1, sizeof(line1), "FPS: %.0f", fps);
+        int factionDisplay = localFaction != NULL ? localFaction->id : -1;
+        snprintf(line2, sizeof(line2), "Faction: %d", factionDisplay);
+        snprintf(line3, sizeof(line3), "Selection: %zu", selectionState.count);
+
+        // White color for text
+        glColor3f(1.0f, 1.0f, 1.0f);
+
+        // Set the raster position for the first line of text (FPS)
+        // 10 pixels from the left, 20 pixels from the top
+        glRasterPos2f(10.0f, 20.0f);
+
+        // glPushAttrib and glPopAttrib are used to save and restore
+        // the current OpenGL state related to display lists.
+        glPushAttrib(GL_LIST_BIT);
+
+        // glListBase sets the base value for display lists.
+        glListBase(openglContext.fontDisplayListBase - 32);
+
+        // glCallLists renders the text using the display lists.
+        // It takes the length of the string, the type of data (unsigned byte),
+        // and a pointer to the string data.
+        glCallLists((GLsizei)strlen(line1), GL_UNSIGNED_BYTE, line1);
+
+        // Second line (Faction ID), 10 pixels from the left, 36 pixels from the top
+        // We add 16 pixels to the y-coordinate to move down for the next line
+        // since each line is approximately 16 pixels high (see font size in openglUtilities.c).
+        glRasterPos2f(10.0f, 36.0f);
+        glCallLists((GLsizei)strlen(line2), GL_UNSIGNED_BYTE, line2);
+
+        // Third line (Selection count), 10 pixels from the left, 52 pixels from the top
+        glRasterPos2f(10.0f, 52.0f);
+        glCallLists((GLsizei)strlen(line3), GL_UNSIGNED_BYTE, line3);
+        glPopAttrib();
     }
 
-    // Now that we know the packet is valid and large enough,
-    // we can parse the contents.
-
-    // The cursor represents our current position in the packet data.
-    // (like a flashing cursor you might see when typing text in notepad)
-    const uint8_t *cursor = data + sizeof(LevelFullPacket);
-
-    // The packet order can be observed from the struct:
-    // typedef struct LevelFullPacket {
-        // uint32_t type;
-        // float width;
-        // float height;
-        // uint32_t factionCount;
-        // uint32_t planetCount;
-        // uint32_t starshipCount;
-    // } LevelFullPacket;
-    // So after the header, we have factions, then planets, then starships.
-    // #pragma pack(push, 1) and #pragma pack(pop) ensure there is no padding in these structs,
-    // so we can safely calculate offsets based on sizes alone.
-    const LevelPacketFactionInfo *factions = (const LevelPacketFactionInfo *)cursor;
-    cursor += factionCount * sizeof(LevelPacketFactionInfo);
-    const LevelPacketPlanetFullInfo *planets = (const LevelPacketPlanetFullInfo *)cursor;
-    cursor += planetCount * sizeof(LevelPacketPlanetFullInfo);
-    const LevelPacketStarshipInfo *starships = (const LevelPacketStarshipInfo *)cursor;
-
-    // For now, we simply print out the contents of the packet to the console.
-    printf("=== Full Level Packet ===\n");
-
-    // Print out the level dimensions 
-    printf("Dimensions: %.1f x %.1f\n", (double)header->width, (double)header->height);
-
-    // Print out faction information
-    printf("Factions: %zu\n", factionCount);
-    for (size_t i = 0; i < factionCount; ++i) {
-        printf("  Faction %d color=(%.2f, %.2f, %.2f, %.2f)\n",
-            factions[i].id,
-            (double)factions[i].color[0],
-            (double)factions[i].color[1],
-            (double)factions[i].color[2],
-            (double)factions[i].color[3]);
-    }
-
-    // Print out planet information
-    printf("Planets: %zu\n", planetCount);
-    for (size_t i = 0; i < planetCount; ++i) {
-        printf("  Planet %zu pos=(%.1f, %.1f) max=%.1f current=%.1f owner=%d claimant=%d\n",
-            i,
-            (double)planets[i].position.x,
-            (double)planets[i].position.y,
-            (double)planets[i].maxFleetCapacity,
-            (double)planets[i].currentFleetSize,
-            planets[i].ownerId,
-            planets[i].claimantId);
-    }
-
-    // Print out starship information
-    printf("Starships: %zu\n", starshipCount);
-    for (size_t i = 0; i < starshipCount; ++i) {
-        printf("  Ship %zu owner=%d target=%d pos=(%.1f, %.1f) vel=(%.1f, %.1f)\n",
-            i,
-            starships[i].ownerId,
-            starships[i].targetPlanetIndex,
-            (double)starships[i].position.x,
-            (double)starships[i].position.y,
-            (double)starships[i].velocity.x,
-            (double)starships[i].velocity.y);
-    }
-
-    return true;
+    SwapBuffers(openglContext.deviceContext);
 }
 
 /**
- * Handles a snapshot level packet received from the server.
- * Parses and prints the contents of the packet.
- * A snapshot packet contains only the dynamic state of planets and starships.
- * @param data Pointer to the packet data.
- * @param length Length of the packet data in bytes.
- */
-static void HandleSnapshotPacket(const uint8_t *data, size_t length) {
+ * Window procedure that handles messages sent to the window.
+ * @param window_handle Handle to the window.
+ * @param msg The message.
+ * @param wParam Additional message information.
+ * @param lParam Additional message information.
+ * @return The result of the message processing and depends on the message sent.
+*/
+LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CLOSE:
+            DestroyWindow(window_handle);
+            return 0;
+        case WM_DESTROY:
+            running = false;
+            PostQuitMessage(0);
+            return 0;
 
-    // First we validate that the packet is large enough to hold the header.
-    // We need at least the header to proceed.
-    if (length < sizeof(LevelSnapshotPacket)) {
-        printf("Snapshot packet smaller than header.\n");
-        return;
-    }
+        //All window drawing has to happen inside the WM_PAINT message.
+        case WM_PAINT: {
+            PAINTSTRUCT paint;
 
-    // Now we can safely cast the data pointer to our header structure.
-    const LevelSnapshotPacket *header = (const LevelSnapshotPacket *)data;
-    if (header->type != LEVEL_PACKET_TYPE_SNAPSHOT) {
-        printf("Unexpected packet type %u for snapshot handler.\n", header->type);
-        return;
-    }
+            //In order to enable window drawing, BeginPaint must be called.
+            //It fills out the PAINTSTRUCT and gives a device context handle for painting
+            BeginPaint(window_handle, &paint);
 
-    // Now that we know the packet is a snapshot,
-    // we can read the counts of planets and starships.
-    size_t planetCount = header->planetCount;
-    size_t starshipCount = header->starshipCount;
+            //We don't actually use the device context from BeginPaint,
+            //as we are using OpenGL for all rendering.
 
+            //If end paint is not called, everything seems to work, 
+            //but the documentation says that it is necessary.
+            EndPaint(window_handle, &paint);
+            return 0;
+        }
+        
+        //WM_SIZE is sent when the window is created or resized.
+        //This makes it an ideal place to assign the size of the OpenGL viewport.
+        case WM_SIZE: {
+            // LOWORD and HIWORD extract the low-order and high-order words from lParam,
+            // as it is expected that if a WM_SIZE message is sent,
+            // the width and height of the client area are packed into lParam.
+            int newWidth = LOWORD(lParam);
+            int newHeight = HIWORD(lParam);
 
-    // Memory size required to store the entire packet is a simple formula,
-    // we just multiply the counts of each object planets and starships
-    // by their respective sizes and then add this all up along with the header size.
-    size_t required = sizeof(LevelSnapshotPacket)
-        + planetCount * sizeof(LevelPacketPlanetSnapshotInfo)
-        + starshipCount * sizeof(LevelPacketStarshipInfo);
+            // We need to update the OpenGL projection matrix to match the new window size.
+            // If we don't do this, the aspect ratio will be incorrect
+            // and the rendered scene will appear stretched or squashed.
+            OpenGLUpdateProjection(&openglContext, newWidth, newHeight);
+            return 0;
+        }
 
-    // Again, like with the full packet, we perform a check
-    // in case of any network corruption that would cause us to read beyond the packet
-    if (!ValidateRemaining(length, required)) {
-        return;
-    }
+        // This message indicates a mouse button was pressed.
+        // lParam contains the x and y coordinates of the mouse cursor.
+        case WM_LBUTTONDOWN: {
+            // Nothing to select if the level is not initialized or there is no local faction.
+            if (!levelInitialized || localFaction == NULL) {
+                PlayerSelectionClear(&selectionState);
+                return 0;
+            }
 
-    // And we also reuse the same cursor technique to parse the packet contents.
-    // The packet order can be observed from the struct:
-    // typedef struct LevelSnapshotPacket {
-    // uint32_t type;
-    // uint32_t planetCount;
-    // uint32_t starshipCount;
-    // } LevelSnapshotPacket;
-    // So after the header, we have planets, then starships.
-    const uint8_t *cursor = data + sizeof(LevelSnapshotPacket);
-    const LevelPacketPlanetSnapshotInfo *planets = (const LevelPacketPlanetSnapshotInfo *)cursor;
-    cursor += planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
-    const LevelPacketStarshipInfo *starships = (const LevelPacketStarshipInfo *)cursor;
+            // Get the mouse position from lParam.
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            Vec2 mousePos = {(float)x, (float)y};
 
-    // For now, we simply print out the contents of the packet to the console.
-    printf("=== Snapshot Packet ===\n");
+            // Get the planet at the mouse position, if any.
+            size_t planetIndex = 0;
+            Planet *clicked = PickPlanetAt(mousePos, &planetIndex);
+            if (clicked == NULL) {
+                // If the player is holding down shift, they're trying to add to their selection,
+                // so we don't clear the selection when clicking empty space.
+                if ((GetKeyState(VK_SHIFT) & 0x8000) == 0) {
+                    PlayerSelectionClear(&selectionState);
+                }
+                return 0;
+            }
 
-    // Print out planet information
-    printf("Planets: %zu\n", planetCount);
-    for (size_t i = 0; i < planetCount; ++i) {
-        printf("  Planet %zu owner=%d claimant=%d current=%.1f\n",
-            i,
-            planets[i].ownerId,
-            planets[i].claimantId,
-            (double)planets[i].currentFleetSize);
-    }
+            // If the clicked planet is not owned by the local faction, clear selection unless Shift is held.
+            if (clicked->owner != localFaction) {
+                // If the clicked planet is not owned by the local faction,
+                // and the Shift key is not pressed, clear the current selection.
+                // We AND the result of GetKeyState with 0x8000 to check if the high-order bit is set,
+                // which indicates that the key is currently down.
+                // Somewhat unrelated, but GetKeyState will return a short. Two bits in the short have a meaning:
+                // - The high-order bit (0x8000) indicates whether the key is currently down.
+                // - The low-order bit (0x0001) indicates whether the key is toggled (for toggle keys like Caps Lock).
+                // - The windows help page documenatation is unclear about what any of the other bits mean.
+                if ((GetKeyState(VK_SHIFT) & 0x8000) == 0) {
+                    PlayerSelectionClear(&selectionState);
+                }
+                return 0;
+            }
 
-    // Print out starship information
-    printf("Starships: %zu\n", starshipCount);
-    for (size_t i = 0; i < starshipCount; ++i) {
-        printf("  Ship %zu owner=%d target=%d pos=(%.1f, %.1f) vel=(%.1f, %.1f)\n",
-            i,
-            starships[i].ownerId,
-            starships[i].targetPlanetIndex,
-            (double)starships[i].position.x,
-            (double)starships[i].position.y,
-            (double)starships[i].velocity.x,
-            (double)starships[i].velocity.y);
+            // If we reach here, the clicked planet is owned by the local faction.
+            // Holding down shift means the player wants to add/remove from their current selection,
+            // as opposed to replacing it entirely (which is the default behavior).
+            bool additive = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            PlayerSelectionToggle(&selectionState, planetIndex, additive);
+            return 0;
+        }
+
+        // Right mouse button is used to issue move orders to selected planets.
+        case WM_RBUTTONDOWN: {
+            // Cannot issue orders if the level is not initialized or there is no selection.
+            if (!levelInitialized || selectionState.count == 0) {
+                return 0;
+            }
+
+            // Get the mouse position from lParam.
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            Vec2 mousePos = {(float)x, (float)y};
+
+            // Get the planet at the mouse position, if any.
+            size_t planetIndex = 0;
+            Planet *clicked = PickPlanetAt(mousePos, &planetIndex);
+            if (clicked == NULL) {
+                return 0;
+            }
+
+            // When sending a move order we need to tell the server about it.
+            // Otherwise, neither this client nor other clients will know about the move order.
+            // That's because we don't actually simulate our own move orders locally, at least
+            // not until we are told by the server in its broadcast of the move order to all
+            // clients. This is to ensure consistency between all clients.
+            const SOCKADDR_IN *targetAddress = serverAddressValid ? &serverAddress : NULL;
+            PlayerSendMoveOrder(&selectionState, clientSocket, targetAddress, &level, planetIndex);
+            return 0;
+        }
+        default:
+            //If the message is not handled by this procedure, 
+            //pass it to the default window procedure.
+            return DefWindowProc(window_handle, msg, wParam, lParam);
     }
 }
 
 /**
- * Main entry point for the client application.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on failure.
+ * Starting point for the program.
+ * @param hInstance Handle to the current instance of the program.
+ * @param hPrevInstance Handle to the previous instance of the program.
+ * @param pCmdLine Pointer to a null-terminated string specifying the command
+ *                line arguments for the application, excluding the program name.
+ * @param nCmdShow Specifies how the window is to be shown.
+ * @return 0 if the program terminates successfully, non-zero otherwise.
  */
-int main() {
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, int nCmdShow) {
     // Force printf to flush immediately
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    // Ask user for server IP and port
-    char serverIp[INET_ADDRSTRLEN];
-    int serverPort;
-    printf("Enter server IP address: ");
-    scanf("%s", serverIp);
-    printf("Enter server port: ");
-    scanf("%d", &serverPort);
+    // Suppresses -Wunused-parameter warning for hPrevInstance and pCmdLine
+    (void)hPrevInstance;
+    (void)pCmdLine;
 
-    // Initialize Winsock
+    // Initialize the level structure
+    // so that it is ready to be used when we receive data from the server.
+    LevelInit(&level);
+
+    // Ask the user for the server address.
+    if (!PromptForServerAddress()) {
+        printf("Failed to obtain server address.\n");
+        return EXIT_FAILURE;
+    }
+
+    // Initialize Winsock for networking.
     if (!InitializeWinsock()) {
         return EXIT_FAILURE;
     }
 
-    // Create socket
-    SOCKET clientSocket = CreateUDPSocket();
+    // Create the UDP socket for communication with the server.
+    clientSocket = CreateUDPSocket();
     if (clientSocket == INVALID_SOCKET) {
         WSACleanup();
         return EXIT_FAILURE;
     }
 
-    // Set receive timeout to 1 second
-    if (!SetSocketTimeout(clientSocket, 1000)) {
-        printf("setsockopt failed\n");
-    }
-
-    // Server address setup
-    struct sockaddr_in serverAddress;
-    if (!CreateAddress(serverIp, serverPort, &serverAddress)) {
+    // Set the socket to non-blocking mode.
+    // As we are running the main loop in a single thread,
+    // we cannot afford to block on network operations.
+    if (!SetNonBlocking(clientSocket)) {
         closesocket(clientSocket);
         WSACleanup();
         return EXIT_FAILURE;
     }
 
-    // Send initial JOIN message to server
-    // to request joining the game.
-    // The server will respond with either a full level packet
-    // or a SERVER_FULL message if it cannot accept more players.
-    printf("Client started. Sending JOIN to %s:%d\n", serverIp, serverPort);
+    // Send a join request to the server to initiate the connection.
+    SendJoinRequest();
 
-    // Handle sending the JOIN message
-    const char *joinMessage = "JOIN";
-    int sendResult = sendto(clientSocket, joinMessage, (int)strlen(joinMessage), 0,
-        (struct sockaddr *)&serverAddress, sizeof(serverAddress));
+    // As the server processes the join request, we proceed to create the window
+    // which will graphically display the game state.
 
-    // Check for send errors
-    if (sendResult == SOCKET_ERROR) {
-        printf("Initial sendto failed: %d\n", WSAGetLastError());
+    // Create the window class to hold information about the window.
+    static WNDCLASS window_class = {0};
+
+    //L = wide character string literal
+    static const wchar_t window_class_name[] = L"LightYearWarsClient";
+
+    // Window class style affects the behavior of the window.
+    // Here, we use CS_OWNDC to allocate a unique device context for the window.
+    // This is important for OpenGL rendering, as it ensures that the rendering context
+    // is tied to a specific device context that won't be shared with other windows.
+    // Were it to be shared, it could lead to rendering issues and performance problems.
+    // For example, let's say two windows share the same device context,
+    // and one window changes the pixel format or other attributes of the device context.
+    // This could inadvertently affect the rendering of the other window,
+    // leading to unexpected visual artifacts or performance degradation.
+    window_class.style = CS_OWNDC;
+
+    //Set up a pointer to a function that windows will call to handle events, or messages.
+    window_class.lpfnWndProc = WindowProcessMessage;
+
+    // The instance handle is a unique identifier for the application.
+    // You might see it used in various Windows API functions to identify the application.
+    window_class.hInstance = hInstance;
+    window_class.lpszClassName = window_class_name;
+
+    // Register the window class with windows.
+    if (!RegisterClass(&window_class)) {
+        printf("RegisterClass failed.\n");
+        closesocket(clientSocket);
+        WSACleanup();
+        return EXIT_FAILURE;
     }
 
-    // Main receive loop
+    // This creates the window.
+    HWND window_handle = CreateWindow(window_class_name, // Name of the window class
+        L"Light Year Wars - Client", // Window title (seen in title bar)
+        WS_OVERLAPPEDWINDOW, // Window style (standard window with title bar and borders)
+        CW_USEDEFAULT, // Initial horizontal position of the window
+        CW_USEDEFAULT, // Initial vertical position of the window
+        CW_USEDEFAULT, // Initial width of the window
+        CW_USEDEFAULT, // Initial height of the window
+        NULL, // Handle to parent window (there is none here)
+        NULL, // Handle to menu (there is none here)
+        hInstance, // Handle to application instance
+        NULL); // Pointer to window creation data (not used here)
 
-    // awaitingFull indicates whether we are still waiting for the full packet.
-    bool awaitingFull = true;
+    // Check if window creation was successful
+    if (!window_handle) {
+        printf("CreateWindow failed.\n");
+        closesocket(clientSocket);
+        WSACleanup();
+        return EXIT_FAILURE;
+    }
 
-    // running indicates whether we should keep running the main loop.
-    bool running = true;
+    // If this isn't called, the window will be created but not shown.
+    // So you might see the program running in the task manager,
+    // but there won't be any visible window on the screen.
+    ShowWindow(window_handle, nCmdShow);
 
-    // Buffer to hold incoming packets
-    char buffer[1024];
+    // Initialize OpenGL for the created window
+    if (!OpenGLInitializeForWindow(&openglContext, window_handle)) {
+        printf("OpenGL initialization failed.\n");
+        DestroyWindow(window_handle);
+        closesocket(clientSocket);
+        WSACleanup();
+        return EXIT_FAILURE;
+    }
 
+    // Set up timing variables for the main loop's delta time calculation.
+    previousTicks = GetTicks();
+    tickFrequency = GetTickFrequency();
+
+    // Main loop
     while (running) {
-        // Receive data from server
+        // Handle any messages sent to the window.
+        MSG message;
 
-        struct sockaddr_in fromAddress;
-        int fromLength = sizeof(fromAddress);
+        // Check for the next message and remove it from the message queue.
+        while (PeekMessage(&message, NULL, 0, 0, PM_REMOVE)) {
+            // Takes virtual keystrokes and adds any applicable character messages to the queue.
+            TranslateMessage(&message);
 
-        int bytesReceived = recvfrom(clientSocket,
-            buffer,
-            (int)sizeof(buffer),
-            0,
-            (struct sockaddr *)&fromAddress,
-            &fromLength);
-
-        // If recvfrom failed, we check if it was a timeout
-        if (bytesReceived == SOCKET_ERROR) {
-            int error = WSAGetLastError();
-            if (error == WSAETIMEDOUT) {
-                if (awaitingFull) {
-                    // If we time out while waiting for the full packet,
-                    // we resend the JOIN message to the server.
-                    // Maybe the server didn't get it the first time.
-                    sendResult = sendto(clientSocket, joinMessage, (int)strlen(joinMessage), 0,
-                        (struct sockaddr *)&serverAddress, sizeof(serverAddress));
-
-                    // Check for send errors
-                    if (sendResult == SOCKET_ERROR) {
-                        printf("Resend JOIN failed: %d\n", WSAGetLastError());
-                    }
-                }
-                // Otherwise, we know that we've just timed out waiting for data,
-                // so we simply continue the loop.
-                continue;
-            }
-
-            // Some other error occurred, we print it and exit the loop
-            printf("recvfrom failed: %d\n", error);
-            break;
+            // Sends the message to the window procedure which handles messages.
+            DispatchMessage(&message);
         }
 
-        if (bytesReceived == 0) {
-            // No data received, continue waiting
-            continue;
+        // Process any incoming network messages from the server.
+        ProcessNetworkMessages();
+
+        // Calculate delta time since the last frame.
+        int64_t currentTicks = GetTicks();
+        float deltaTime = (float)(currentTicks - previousTicks) / (float)tickFrequency;
+        previousTicks = currentTicks;
+
+        // If we have a level and time has passed, we must update the level state.
+        if (levelInitialized && deltaTime > 0.0f) {
+            LevelUpdate(&level, deltaTime);
         }
 
-        // Process the received packet
-        // If the packet is smaller than 4 bytes, 
-        // we assume it's part of a text message
-        // like "SERVER_FULL".
-        // We will add however much of the assumed (sub)string we received
-        // as a null-terminated string to the buffer.
-        // As we piece together the string, we also print it out.
-        // Furthermore, if it turns out to be "SERVER_FULL",
-        // we exit the main loop.
-        if (bytesReceived < (int)sizeof(uint32_t)) {
-            // Handle as text message
-            // We cap the received size to the buffer size minus one
-            // to leave space for the null terminator.
-            int capped = bytesReceived < (int)sizeof(buffer) - 1 ? bytesReceived : (int)sizeof(buffer) - 1;
-            buffer[capped] = '\0';
-
-            // Print the server message
-            printf("Server says: %s\n", buffer);
-            if (strcmp(buffer, "SERVER_FULL") == 0) {
-                // In the special case of SERVER_FULL,
-                // we exit the main loop.
-                running = false;
-            }
-            continue;
+        // Calculate frames per second (FPS) for display.
+        float fps = 0.0f;
+        if (deltaTime > 0.0001f) {
+            fps = 1.0f / deltaTime;
         }
 
-        // At this point we have at least 4 bytes,
-        // so we can safely read the packet type.
-        const uint8_t *data = (const uint8_t *)buffer;
-
-        // Stores the packet type in a local variable
-        uint32_t packetType;
-
-        // Copy the packet type from the data.
-        // Packet type better be aligned properly here,
-        // and better be the first 4 bytes of the packet,
-        // in the same endianness as the client,
-        // since we are directly copying from the data buffer.
-        memcpy(&packetType, data, sizeof(uint32_t));
-
-        // Now we can handle the packet based on its type.
-        if (packetType == LEVEL_PACKET_TYPE_FULL) {
-            // It's a full level packet, telling us
-            // the entire state of the level.
-            if (HandleFullPacket(data, (size_t)bytesReceived)) {
-                awaitingFull = false;
-            }
-        } else if (packetType == LEVEL_PACKET_TYPE_SNAPSHOT) {
-            // It's a snapshot packet, giving us
-            // an update on the dynamic state of the level.
-            if (awaitingFull) {
-                printf("Snapshot received before full packet. Waiting for full packet...\n");
-                continue;
-            }
-            HandleSnapshotPacket(data, (size_t)bytesReceived);
-        } else {
-            // Something went wrong, unknown packet type.
-            // Debug print the unknown type.
-            printf("Unknown packet type %u (length=%d).\n", packetType, bytesReceived);
-        }
+        // Now that we've updated and processed everything, its time to render the frame.
+        RenderFrame(fps);
     }
 
-    // At this point, we're done running the main loop,
-    // so we clean up resources and exit.
-    closesocket(clientSocket);
+    // At this point, we are exiting the main loop and need to clean up resources.
+    PlayerSelectionFree(&selectionState);
+    LevelRelease(&level);
+
+    if (clientSocket != INVALID_SOCKET) {
+        closesocket(clientSocket);
+    }
     WSACleanup();
+
+    OpenGLShutdownForWindow(&openglContext, window_handle);
     return EXIT_SUCCESS;
 }

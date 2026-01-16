@@ -16,7 +16,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
+
 #include "Utilities/networkUtilities.h"
 #include "Objects/level.h"
+#include "Utilities/gameUtilities.h"
+#include "Utilities/renderUtilities.h"
+#include "Objects/planet.h"
+#include "Objects/starship.h"
 
 #endif // _CLIENT_H_

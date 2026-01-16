@@ -8,25 +8,8 @@
 // Used to exit the main loop.
 static bool running = true;
 
-// The device context and rendering context for OpenGL.
-// A device context is a Windows structure that defines a set of graphic objects
-// and their associated attributes, as well as the graphic modes that affect output.
-static HDC window_device_context = NULL;
-
-// The rendering context is an OpenGL structure that holds all of OpenGL's state information
-// for drawing to a device context.
-static HGLRC window_render_context = NULL;
-
-// OpenGL font display list base and window dimensions.
-// This is used for rendering text.
-// If for example, this equals 1000, then the display list for the character 'A' (ASCII 65) would be 1065.
-// The display list is a compiled set of OpenGL commands that can be executed more efficiently.
-// This is useful for rendering text because each character can be drawn with a single call to the display list.
-static GLuint font_display_list_base = 0;
-
-// Window dimensions
-static int window_width = 0;
-static int window_height = 0;
+// Aggregated OpenGL resources shared by the server window.
+static OpenGLContext openglContext = {0};
 
 // The main game level representing the ongoing game state.
 static Level level;
@@ -42,23 +25,15 @@ static size_t playerCount = 0;
 
 // Accumulator for snapshot timing.
 // Used to track time elapsed since last snapshot broadcast.
-static float snapshotAccumulator = 0.0f;
-
-// Background color constants for rendering.
-static const float BACKGROUND_GRADIENT_INNER_COLOR[4] = {0.36f, 0.30f, 0.43f, 1.0f};
-static const float BACKGROUND_GRADIENT_OUTER_COLOR[4] = {BACKGROUND_COLOR_R, BACKGROUND_COLOR_G, BACKGROUND_COLOR_B, 1.0f};
+static float planetStateAccumulator = 0.0f;
+static SOCKET server_socket = INVALID_SOCKET;
 
 // Forward declarations of static functions
 static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
 static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
-static bool SendFullPacketToPlayer(Player *player, SOCKET sock);
-static void BroadcastSnapshots(SOCKET sock);
-static void SendPacketToPlayer(Player *player, SOCKET sock, const LevelPacketBuffer *packet);
-static bool InitializeOpenGL(HWND window_handle);
-static void ShutdownOpenGL(HWND window_handle);
-static void UpdateProjection(int width, int height);
-static void DrawBackgroundGradient(int width, int height);
+static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
+static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
 
 /**
  * Window procedure that handles messages sent to the window.
@@ -99,13 +74,13 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // LOWORD and HIWORD extract the low-order and high-order words from lParam,
             // as it is expected that if a WM_SIZE message is sent,
             // the width and height of the client area are packed into lParam.
-            window_width = LOWORD(lParam);
-            window_height = HIWORD(lParam);
+            int newWidth = LOWORD(lParam);
+            int newHeight = HIWORD(lParam);
 
             // We need to update the OpenGL projection matrix to match the new window size.
             // If we don't do this, the aspect ratio will be incorrect
             // and the rendered scene will appear stretched or squashed.
-            UpdateProjection(window_width, window_height);
+            OpenGLUpdateProjection(&openglContext, newWidth, newHeight);
             return 0;
         }
         case WM_LBUTTONDOWN: {
@@ -124,8 +99,10 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             if (clicked) {
+                // Every client must know about fleet launches,
+                // so it must be broadcast to all connected players.
                 if (selected_planet && selected_planet != clicked) {
-                    PlanetSendFleet(selected_planet, clicked, &level);
+                    LaunchFleetAndBroadcast(selected_planet, clicked);
                     selected_planet = NULL;
                 } else if (clicked->owner != NULL) {
                     if (selected_planet == clicked) {
@@ -257,132 +234,180 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
 }
 
 /**
- * Sends a packet to the specified player.
- * @param player A pointer to the Player to send the packet to.
- * @param sock The socket to use for sending the packet.
- * @param packet A pointer to the LevelPacketBuffer containing the packet data.
+ * Launches a fleet from the origin planet to the destination planet
+ * and broadcasts the launch to all connected players to allow their
+ * clients to simulate the fleet movement.
+ * @param origin Pointer to the origin Planet.
+ * @param destination Pointer to the destination Planet.
+ * @return true if the fleet was successfully launched and broadcast, false otherwise.
  */
-static void SendPacketToPlayer(Player *player, SOCKET sock, const LevelPacketBuffer *packet) {
+static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination) {
     // Basic validation of input pointers.
-    if (player == NULL || packet == NULL || packet->data == NULL) {
-        return;
+    if (origin == NULL || destination == NULL) {
+        return false;
     }
 
-    // Ensure the packet size does not exceed INT_MAX
-    // as sendto expects an int for the size parameter.
-    if (packet->size > (size_t)INT_MAX) {
-        printf("Packet too large to send (size=%zu).\n", packet->size);
-        return;
+    if (origin == destination) {
+        return false;
     }
 
-    // Actually send the packet using sendto.
-    // Argments:
-    // sock - the socket to send on
-    // (const char *)packet->data - pointer to the data to send
-    // (int)packet->size - size of the data to send
-    // 0 - flags (none)
-    // (SOCKADDR *)&player->address - pointer to the destination address
-    // (int)sizeof(player->address) - size of the destination address
-    int result = sendto(sock,
-        (const char *)packet->data,
-        (int)packet->size,
-        0,
-        (SOCKADDR *)&player->address,
-        (int)sizeof(player->address));
-
-    // Check for and report any error
-    if (result == SOCKET_ERROR) {
-        printf("sendto failed: %d\n", WSAGetLastError());
+    if (level.planets == NULL || level.planetCount == 0) {
+        return false;
     }
+
+    if (origin < level.planets || destination < level.planets) {
+        return false;
+    }
+
+    if (origin >= level.planets + level.planetCount) {
+        return false;
+    }
+
+    if (destination >= level.planets + level.planetCount) {
+        return false;
+    }
+
+    // Determine the indices of the origin and destination planets.
+    size_t originIndex = (size_t)(origin - level.planets);
+    size_t destinationIndex = (size_t)(destination - level.planets);
+
+    // Determine the number of ships to launch based on the origin planet's current fleet size.
+    int shipCount = (int)floorf(origin->currentFleetSize);
+    if (shipCount <= 0) {
+        return false;
+    }
+
+    // Determine the owner faction for the launched fleet.
+    const Faction *owner = origin->owner;
+    if (!PlanetSendFleet(origin, destination, &level)) {
+        return false;
+    }
+
+    // Broadcast the fleet launch to all connected players, provided of course
+    // that we have a valid server socket.
+    // The current approach works with multiple planet launches by simply having
+    // this overall function called multiple times in succession for each launch.
+    // This may be somewhat inefficient compared to having a single call where each origin
+    // planet is specified then compressed, perhaps with a single int, or multiple ints
+    // being used to hold the origin planet indices, with them being divided by 2,
+    // and then % 2 telling if the index is part of the origin or destination,
+    // with enough ints being used to hold all the origin indices followed by
+    // the single destination index.
+    if (server_socket != INVALID_SOCKET) {
+        int32_t ownerId = owner != NULL ? (int32_t)owner->id : -1;
+        BroadcastFleetLaunch(server_socket, players, playerCount,
+            (int32_t)originIndex, (int32_t)destinationIndex,
+            (int32_t)shipCount, ownerId);
+    }
+
+    return true;
 }
 
 /**
- * Sends a full level packet to the specified player.
- * @param player A pointer to the Player to send the packet to.
- * @param sock The socket to use for sending the packet.
- * @return true if the packet was sent successfully, false otherwise.
+ * Processes a move order packet received from a client.
+ * Validates ownership of origin planets before issuing fleet movements.
+ * @param sender Address of the client that sent the packet.
+ * @param data Pointer to the packet data.
+ * @param size Size of the packet data.
  */
-static bool SendFullPacketToPlayer(Player *player, SOCKET sock) {
-    // Basic validation of input pointer.
-    if (player == NULL) {
-        return false;
+static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size) {
+    // Basic validation of input pointers and packet size.
+    if (sender == NULL || data == NULL) {
+        return;
     }
 
-    // Create the full level packet buffer.
-    LevelPacketBuffer packet;
-    if (!LevelCreateFullPacketBuffer(&level, &packet)) {
-        printf("Failed to build full level packet.\n");
-        return false;
+    if (size < sizeof(LevelMoveOrderPacket)) {
+        return;
     }
 
-    // Send the packet to the player.
-    bool success = false;
-    if (packet.size <= (size_t)INT_MAX) {
-        // Actually send the packet using sendto.
-        // Argments:
-        // sock - the socket to send on
-        // (const char *)packet.data - pointer to the data to send
-        // (int)packet.size - size of the data to send
-        // 0 - flags (none)
-        // (SOCKADDR *)&player->address - pointer to the destination address
-        // (int)sizeof(player->address) - size of the destination address
-        int result = sendto(sock,
-            (const char *)packet.data,
-            (int)packet.size,
-            0,
-            (SOCKADDR *)&player->address,
-            (int)sizeof(player->address));
+    // Cast the data to a LevelMoveOrderPacket and extract the information.
+    const LevelMoveOrderPacket *packet = (const LevelMoveOrderPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_MOVE_ORDER) {
+        return;
+    }
 
-        // Check for and report any error
-        if (result != SOCKET_ERROR) {
-            success = true;
+    // Check that the packet size matches the expected size
+    // based on the number of origin planets specified.
+    size_t originCount = (size_t)packet->originCount;
+    size_t requiredSize = sizeof(LevelMoveOrderPacket) + originCount * sizeof(int32_t);
+    if (size < requiredSize || originCount == 0) {
+        return;
+    }
 
-            // This player now knows the full level state,
-            // so they only need snapshots going forward.
-            player->awaitingFullPacket = false;
-        } else {
-            printf("sendto failed: %d\n", WSAGetLastError());
+    // Find the player that sent this packet.
+    Player *player = FindPlayerByAddress(sender);
+    if (player == NULL || player->faction == NULL) {
+        return;
+    }
+
+    // Validate the destination planet.
+    int32_t destinationIndex = packet->destinationPlanetIndex;
+    if (destinationIndex < 0 || (size_t)destinationIndex >= level.planetCount) {
+        return;
+    }
+
+    Planet *destination = &level.planets[destinationIndex];
+    const int32_t *originIndices = packet->originPlanetIndices;
+
+    // Validate all origin planets before issuing orders.
+    // Rather than rejecting the entire order if any origin planet is invalid,
+    // we simply skip over invalid origins. This allows players to issue
+    // move orders without being overly penalized for mistakes,
+    // like if their client is out of date and they try to move from a planet
+    // they no longer own.
+
+    // We create a temporary array to hold valid origin indices.
+    int32_t *validOrigins = (int32_t *)malloc(originCount * sizeof(int32_t));
+
+    if (validOrigins == NULL) {
+        // Compared to other failures, this one is severe enough
+        // to warrant logging an error message.
+        printf("Failed to allocate memory for validating move order origins.\n");
+        return;
+    }
+
+    // Then we validate each origin planet, and only keep those
+    // that the player actually owns.
+    size_t validOriginCount = 0;
+    for (size_t i = 0; i < originCount; ++i) {
+        int32_t originIndex = originIndices[i];
+
+        // A negative index or out-of-bounds index is invalid.
+        if (originIndex < 0 || (size_t)originIndex >= level.planetCount) {
+            continue;
         }
-    } else {
-        // In case the packet is too large to send,
-        // we report an error for clarity.
-        printf("Full packet too large to send (size=%zu).\n", packet.size);
+
+        Planet *origin = &level.planets[originIndex];
+
+        // A planet not owned by the player's faction is invalid.
+        if (origin->owner != player->faction) {
+            continue;
+        }
+
+        validOrigins[validOriginCount++] = originIndex;
     }
 
-    // Since we've sent the packet (or failed to),
-    // we can release the packet buffer now.
-    LevelPacketBufferRelease(&packet);
-    return success;
-}
-
-/**
- * Broadcasts level snapshot packets to all connected players.
- * @param sock The socket to use for sending the packets.
- */
-static void BroadcastSnapshots(SOCKET sock) {
-    // No point in continuing if there are no players.
-    if (playerCount == 0) {
+    // If no valid origins remain, we can simply free and return.
+    if (validOriginCount == 0) {
+        free(validOrigins);
         return;
     }
 
-    // Create the snapshot packet buffer.
-    LevelPacketBuffer packet;
-    if (!LevelCreateSnapshotPacketBuffer(&level, &packet)) {
-        printf("Failed to build snapshot packet.\n");
-        return;
+    // Execute the move orders now that validation has succeeded.
+    for (size_t i = 0; i < validOriginCount; ++i) {
+        int32_t originIndex = validOrigins[i];
+        Planet *origin = &level.planets[originIndex];
+        if (origin == destination) {
+            continue;
+        }
+
+        if (!LaunchFleetAndBroadcast(origin, destination)) {
+            // Optional debug logging for rejected orders.
+        }
     }
 
-    // Send the same data to all players 
-    // to save on memory and processing,
-    // and to ensure all players have more or
-    // less consistent data.
-    for (size_t i = 0; i < playerCount; ++i) {
-        SendPacketToPlayer(&players[i], sock, &packet);
-    }
-
-    // Since we've sent the packet to all players,
-    // we can release the packet buffer now.
-    LevelPacketBufferRelease(&packet);
+    // Clean up the temporary array.
+    free(validOrigins);
 }
 
 /**
@@ -408,7 +433,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     //L = wide character string literal
     //This name is used to reference the window class later.
-    static const wchar_t window_class_name[] = L"PixelDrawer";
+    static const wchar_t window_class_name[] = L"LightYearWarsServer";
 
     // Window class style affects the behavior of the window.
     // Here, we use CS_OWNDC to allocate a unique device context for the window.
@@ -437,7 +462,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     //This creates the window.
     HWND window_handle = CreateWindow(window_class_name, // Name of the window class
-                                      L"Light Year Wars", // Window title (seen in title bar)
+                                      L"Light Year Wars - Server", // Window title (seen in title bar)
                                       WS_OVERLAPPEDWINDOW, // Window style (standard window with title bar and borders)
                                       CW_USEDEFAULT, // Initial horizontal position of the window
                                       CW_USEDEFAULT, // Initial vertical position of the window
@@ -460,7 +485,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     ShowWindow(window_handle, nCmdShow);
 
     // Initialize OpenGL for the created window
-    if (!InitializeOpenGL(window_handle)) {
+    if (!OpenGLInitializeForWindow(&openglContext, window_handle)) {
         printf("OpenGL initialization failed.\n");
         DestroyWindow(window_handle);
         return EXIT_FAILURE;
@@ -478,28 +503,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         // Without this cleanup, resources like device contexts and rendering contexts
         // could remain allocated, leading to memory leaks and other mysterious issues
         // like windows having to be force shut down because it thinks some resources are still in use.
-        ShutdownOpenGL(window_handle);
+        OpenGLShutdownForWindow(&openglContext, window_handle);
         return EXIT_FAILURE;
     }
 
     // Create a UDP socket
     SOCKET sock = CreateUDPSocket();
     if (sock == INVALID_SOCKET) {
-        ShutdownOpenGL(window_handle);
+        OpenGLShutdownForWindow(&openglContext, window_handle);
         return EXIT_FAILURE;
     }
 
     // Set non-blocking mode
     if (!SetNonBlocking(sock)) {
-        ShutdownOpenGL(window_handle);
+        OpenGLShutdownForWindow(&openglContext, window_handle);
         return EXIT_FAILURE;
     }
 
     // Bind the socket to the local address and port number
     if (!BindSocket(sock, SERVER_PORT)) {
-        ShutdownOpenGL(window_handle);
+        OpenGLShutdownForWindow(&openglContext, window_handle);
         return EXIT_FAILURE;
     }
+
+    server_socket = sock;
 
     // Buffer to hold incoming messages
     char recv_buffer[512];
@@ -510,9 +537,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     printf("Generating a random level...\n");
     LevelInit(&level);
-    float level_width = (float)window_width > 0 ? (float)window_width : 800.0f;
-    float level_height = (float)window_height > 0 ? (float)window_height : 600.0f;
-    GenerateRandomLevel(&level, 4, 2, 5.0f, 15.0f, level_width, level_height, 0);
+    float level_width = 800.0f;
+    float level_height = 600.0f;
+    GenerateRandomLevel(&level, 12, 2, 5.0f, 15.0f, level_width, level_height, 0);
 
     printf("Entering main program loop...\n");
 
@@ -563,20 +590,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         // If data was received successfully (bytes_received is not SOCKET_ERROR)
         // then we process the received data.
         if (bytes_received != SOCKET_ERROR) {
+            bool handled = false;
 
-            // Null-terminate the received data to make it a valid string
-            recv_buffer[bytes_received] = '\0';
-            bool isJoinRequest = bytes_received >= 4 && strncmp(recv_buffer, "JOIN", 4) == 0;
+            // Check if the packet is a JOIN request.
+            if (bytes_received >= 4 && strncmp(recv_buffer, "JOIN", 4) == 0) {
+                handled = true;
 
-            // Handle join requests
-            if (isJoinRequest) {
+                // Null-terminate so we can safely treat it as text.
+                recv_buffer[bytes_received] = '\0';
+
                 // Ensure a player exists for the sender's address
-                // and send them the full level packet.
-                // This will also check if the server is full
-                // and return NULL if no more players can be accepted.
+                // and send them the full level packet alongside their assignment.
                 Player *player = EnsurePlayerForAddress(&sender_address);
                 if (player != NULL) {
-                    SendFullPacketToPlayer(player, sock);
+                    SendFullPacketToPlayer(player, sock, &level);
                 } else {
                     // If there is no available faction or the server is full,
                     // we send a SERVER_FULL message back to the client.
@@ -587,14 +614,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                         0,
                         (SOCKADDR *)&sender_address,
                         sender_address_size);
-                    
-                    // Check for and report any error
+
                     if (sent == SOCKET_ERROR) {
                         printf("sendto failed: %d\n", WSAGetLastError());
                     }
                 }
             }
+
+            // If the packet wasn't handled yet, we check if it's a move order packet.
+            if (!handled && bytes_received >= (int)sizeof(uint32_t)) {
+                uint32_t packetType = 0;
+                memcpy(&packetType, recv_buffer, sizeof(uint32_t));
+
+                if (packetType == LEVEL_PACKET_TYPE_MOVE_ORDER) {
+                    HandleMoveOrderPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
+                    handled = true;
+                }
+            }
         } else {
+            // If recvfrom failed, we check the error code.
+            // If it's not WSAEWOULDBLOCK, we log the error,
+            // as WSAEWOULDBLOCK simply indicates that there was no data to read
+            // in non-blocking mode, which is expected behavior.
             int error = WSAGetLastError();
             if (error != WSAEWOULDBLOCK) {
                 printf("recvfrom failed: %d\n", error);
@@ -609,12 +650,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         // Update the level state
         LevelUpdate(&level, delta_time);
 
-        // Keep track of time for snapshot broadcasting
-        // Snapshots shall be broadcasted at 1 Hz
-        snapshotAccumulator += delta_time;
-        while (snapshotAccumulator >= 1.0f) {
-            BroadcastSnapshots(sock);
-            snapshotAccumulator -= 1.0f;
+        // Keep track of time for planet state broadcasting
+        // Broadcasts now run at 20 Hz to keep ownership in sync.
+        planetStateAccumulator += delta_time;
+        while (planetStateAccumulator >= PLANET_STATE_BROADCAST_INTERVAL) {
+            BroadcastSnapshots(sock, &level, players, playerCount);
+            planetStateAccumulator -= PLANET_STATE_BROADCAST_INTERVAL;
         }
 
         // Calculate frames per second (FPS)
@@ -626,7 +667,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             fps = 1.0f / delta_time;
         }
 
-        if (window_device_context && window_render_context) {
+        if (openglContext.deviceContext && openglContext.renderContext) {
             // Sets the clear color for the window (background color)
             glClearColor(BACKGROUND_COLOR_R, BACKGROUND_COLOR_G, BACKGROUND_COLOR_B, BACKGROUND_COLOR_A);
 
@@ -639,9 +680,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             // Load the identity matrix to reset any previous transformations
             glLoadIdentity();
 
-            if (window_width > 0 && window_height > 0) {
+            if (openglContext.width > 0 && openglContext.height > 0) {
                 // Draw the background gradient
-                DrawBackgroundGradient(window_width, window_height);
+                DrawBackgroundGradient(openglContext.width, openglContext.height);
 
                 // Draw each planet in the level
                 for (size_t i = 0; i < level.planetCount; ++i) {
@@ -668,7 +709,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             }
 
             // Display FPS in the top-left corner
-            if (font_display_list_base && window_width >= 10 && window_height >= 10) {
+            if (openglContext.fontDisplayListBase && openglContext.width >= 10 && openglContext.height >= 10) {
                 char fps_string[32];
                 snprintf(fps_string, sizeof(fps_string), "FPS: %.0f", fps);
 
@@ -682,9 +723,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 glPushAttrib(GL_LIST_BIT);
 
                 // Set the base display list for character rendering
-                // This is done by subtracting 32 from font_display_list_base
+                // This is done by subtracting 32 from the display list base
                 // because our display lists start at ASCII character 32 (space character).
-                glListBase(font_display_list_base - 32);
+                glListBase(openglContext.fontDisplayListBase - 32);
 
                 // Call the display lists for each character in the fps_string
                 // This renders the string to the screen.
@@ -694,272 +735,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 glPopAttrib();
             }
 
-            SwapBuffers(window_device_context);
+            SwapBuffers(openglContext.deviceContext);
         }
     }
 
     // At this point in the code, we are exiting the main loop and need to clean up resources.
     closesocket(sock);
+    server_socket = INVALID_SOCKET;
     WSACleanup();
     LevelRelease(&level);
-    ShutdownOpenGL(window_handle);
+    OpenGLShutdownForWindow(&openglContext, window_handle);
     return EXIT_SUCCESS;
-}
-
-/**
- * Initializes OpenGL for the given window.
- * @param window_handle Handle to the window.
- * @return true if successful, false otherwise.
- */
-static bool InitializeOpenGL(HWND window_handle) {
-    
-    // A PIXELFORMATDESCRIPTOR describes the pixel format of a drawing surface.
-    // It specifies properties such as color depth, buffer types, and other attributes.
-    PIXELFORMATDESCRIPTOR pfd = {
-        sizeof(PIXELFORMATDESCRIPTOR), // Size of this structure
-        1, // Version number
-        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER, // Flags (draw to window, support OpenGL, double buffering)
-        PFD_TYPE_RGBA, // The kind of framebuffer. RGBA or palette.
-        32, // Color depth in bits
-        0, 0, 0, 0, 0, 0, // From left to right: Red bits, Red shift, Green bits, Green shift, Blue bits, Blue shift
-        0, // Alpha bits
-        0, // Alpha shift
-        0, // Accumulation buffer bits
-        0, 0, 0, 0, // From left to right: Accumulation red bits, green bits, blue bits, alpha bits
-        24, // Depth buffer bits
-        8, // Stencil buffer bits
-        0, // Auxiliary buffer bits
-        PFD_MAIN_PLANE, // Layer type (main drawing layer)
-        0, // Reserved
-        0, 0, 0 // Layer masks (ignored for main plane)
-    };
-
-    // Get the device context for the window
-    // This essentially prepares the window for OpenGL rendering
-    // by obtaining a handle to its device context.
-    window_device_context = GetDC(window_handle);
-
-    // Check if device context retrieval was successful
-    if (!window_device_context) {
-        printf("GetDC failed.\n");
-        return false;
-    }
-
-    // A pixel format defines how pixels are stored and represented in a drawing surface.
-    // This can be things like color depth, buffer types, and other attributes.
-
-    // Choose a pixel format that matches the desired properties
-    int pixel_format = ChoosePixelFormat(window_device_context, &pfd);
-
-    // Check if pixel format selection was successful
-    if (pixel_format == 0) {
-        printf("ChoosePixelFormat failed.\n");
-        ReleaseDC(window_handle, window_device_context);
-        window_device_context = NULL;
-        return false;
-    }
-
-    // Set the chosen pixel format for the device context
-    if (!SetPixelFormat(window_device_context, pixel_format, &pfd)) {
-        printf("SetPixelFormat failed.\n");
-        ReleaseDC(window_handle, window_device_context);
-        window_device_context = NULL;
-        return false;
-    }
-
-    // An OpenGL rendering context is a data structure that stores all of OpenGL's state information
-    // for drawing to a device context. It is required for any OpenGL rendering to occur.
-
-    // Create the OpenGL rendering context
-    window_render_context = wglCreateContext(window_device_context);
-    if (!window_render_context) {
-        printf("wglCreateContext failed.\n");
-        ReleaseDC(window_handle, window_device_context);
-        window_device_context = NULL;
-        return false;
-    }
-
-    // Make the rendering context current
-    if (!wglMakeCurrent(window_device_context, window_render_context)) {
-        printf("wglMakeCurrent failed.\n");
-        wglDeleteContext(window_render_context);
-        window_render_context = NULL;
-        ReleaseDC(window_handle, window_device_context);
-        window_device_context = NULL;
-        return false;
-    }
-
-    // Set up some basic OpenGL state
-    // By default, OpenGL enables depth testing and flat shading.
-    // For this application, we want to disable depth testing
-    // and use smooth shading for better visual quality.
-    glDisable(GL_DEPTH_TEST);
-    glShadeModel(GL_SMOOTH);
-
-    // Enable blending for transparent colors and anti-aliasing
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    // Enable line smoothing for anti-aliased lines
-    glEnable(GL_LINE_SMOOTH);
-    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-
-    // Set the initial viewport and projection matrix
-    // This ensures that the OpenGL rendering area matches the window size.
-    RECT client_rect;
-    if (GetClientRect(window_handle, &client_rect)) {
-        window_width = client_rect.right - client_rect.left;
-        window_height = client_rect.bottom - client_rect.top;
-        UpdateProjection(window_width, window_height);
-    }
-
-    // Create a font for rendering text in OpenGL
-    HFONT font = CreateFontA(-16, // Height of font. This is negative to indicate character height rather than cell height
-                             0, // Width of font. 0 means default width based on height
-                             0, // Angle of escapement. Escapement is the angle between the baseline of a character and the x-axis of the device.
-                             0, // Orientation angle. This is the angle between the baseline of a character and the x-axis of the device.
-                             FW_NORMAL, // Font weight. FW_NORMAL is normal weight.
-                             FALSE, // Italic attribute option
-                             FALSE, // Underline attribute option
-                             FALSE, // Strikeout attribute option
-                             ANSI_CHARSET, // Character set identifier
-                             OUT_TT_PRECIS, // Output precision. TT means TrueType.
-                             CLIP_DEFAULT_PRECIS, // Clipping precision
-                             ANTIALIASED_QUALITY, // Output quality
-                             FF_DONTCARE | DEFAULT_PITCH, // Family and pitch of the font (don't care about family, default pitch)
-                             "Segoe UI"); // Typeface name
-
-    // If font creation was successful, create display lists for characters 32 to 127
-    if (font) {
-        // Generate display lists for 96 characters (from ASCII 32 to 127)
-        font_display_list_base = glGenLists(96);
-
-        // If display list generation was successful, create the font bitmaps
-        if (font_display_list_base) {
-
-            // HFONT is a handle to a font object
-            // Here we select the created font into the device context
-            // so that we can create bitmaps for the font characters.
-            HFONT old_font = (HFONT)SelectObject(window_device_context, font);
-
-            // wglUseFontBitmapsA creates a set of bitmap display lists for the glyphs
-            // of the currently selected font in the specified device context.
-            if (!wglUseFontBitmapsA(window_device_context, 32, 96, font_display_list_base)) {
-
-                // If wglUseFontBitmapsA fails, we clean up the generated display lists
-                glDeleteLists(font_display_list_base, 96);
-
-                // Reset font_display_list_base to 0 to indicate failure
-                font_display_list_base = 0;
-            }
-
-            // Restore the previous font in the device context
-            SelectObject(window_device_context, old_font);
-        }
-
-        // We can delete the font object now, as the display lists have been created
-        DeleteObject(font);
-    }
-
-    return true;
-}
-
-
-/**
- * Shuts down OpenGL and releases resources.
- * @param window_handle Handle to the window.
- */
-static void ShutdownOpenGL(HWND window_handle) {
-
-    // Delete the OpenGL rendering context and release the device context
-    if (window_render_context) {
-
-        // If we created display lists for the font, delete them
-        if (font_display_list_base) {
-            glDeleteLists(font_display_list_base, 96);
-            font_display_list_base = 0;
-        }
-
-        // Turn off the current rendering context
-        // wglMakeCurrent(NULL, NULL) disassociates the current rendering context from the device context.
-        // This is important to do before deleting the rendering context itself.
-        wglMakeCurrent(NULL, NULL);
-
-        // Here, we actually delete the rendering context
-        wglDeleteContext(window_render_context);
-        window_render_context = NULL;
-    }
-
-    // Release the device context for the window
-    if (window_device_context) {
-
-        // ReleaseDC releases the device context previously obtained by GetDC.
-        ReleaseDC(window_handle, window_device_context);
-        window_device_context = NULL;
-    }
-}
-
-/**
- * Updates the OpenGL projection matrix based on the new window size.
- * @param width The new width of the window.
- * @param height The new height of the window.
- */
-static void UpdateProjection(int width, int height) {
-
-    // If the rendering context is not initialized, we cannot update the projection
-    if (!window_render_context || width <= 0 || height <= 0) {
-        return;
-    }
-
-    // glViewport sets the viewport, which is the rectangular area of the window where OpenGL will draw.
-    // It's parameters are from left to right:
-    // x-axis position of the lower left corner of the viewport rectangle, in pixels.
-    // y-axis position of the lower left corner of the viewport rectangle, in pixels.
-    // width of the viewport.
-    // height of the viewport.
-    glViewport(0, 0, width, height);
-
-    // Set up an orthographic projection matrix
-    // This defines a 2D projection where objects are the same size regardless of their depth.
-    glMatrixMode(GL_PROJECTION);
-
-    // glLoadIdentity resets the current matrix to the identity matrix.
-    // If we don't do this, the new projection matrix will be multiplied with the existing one,
-    // leading to incorrect transformations.
-    glLoadIdentity();
-
-    // glOrtho defines a 2D orthographic projection matrix.
-    // The parameters specify the clipping volume:
-    // left, right, bottom, top, near, far
-    glOrtho(0.0, (GLdouble)width, (GLdouble)height, 0.0, -1.0, 1.0);
-
-    // Switch back to the modelview matrix mode
-    // This is the matrix mode we will use for rendering objects.
-    glMatrixMode(GL_MODELVIEW);
-}
-
-/**
- * Draws a radial background gradient.
- * @param width The width of the area to draw the gradient in.
- * @param height The height of the area to draw the gradient in.
- */
-static void DrawBackgroundGradient(int width, int height) {
-    // Basic validation of input dimensions.
-    if (width <= 0 || height <= 0) {
-        return;
-    }
-
-    // Calculate center and radius for the gradient
-    float centerX = (float)width * 0.5f;
-    float centerY = (float)height * 0.5f;
-    float halfWidth = (float)width * 0.5f;
-    float halfHeight = (float)height * 0.5f;
-    float radius = sqrtf(halfWidth * halfWidth + halfHeight * halfHeight) * 1.05f;
-
-    // Ensure blending is disabled for the gradient
-    // to avoid unintended color mixing
-    // with the background clear color.
-    glDisable(GL_BLEND);
-    DrawRadialGradientRing(centerX, centerY, 0.0f, radius, 128,
-        BACKGROUND_GRADIENT_INNER_COLOR, BACKGROUND_GRADIENT_OUTER_COLOR);
 }

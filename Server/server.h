@@ -23,29 +23,20 @@
 #include "Utilities/gameUtilities.h"
 #include "Utilities/networkUtilities.h"
 #include "Utilities/renderUtilities.h"
+#include "Utilities/openglUtilities.h"
 #include "Objects/level.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
 #include "Objects/player.h"
 
-// Macros
-#if RAND_MAX == 32767
-#define Rand32() ((rand() << 16) + (rand() << 1) + (rand() & 1))
-#else
-#define Rand32() rand()
-#endif
-
 // Port number for the server to listen on
-#define SERVER_PORT 6767
-
-// Color of the background (RGBA)
-#define BACKGROUND_COLOR_R 0.3f
-#define BACKGROUND_COLOR_G 0.25f
-#define BACKGROUND_COLOR_B 0.29f
-#define BACKGROUND_COLOR_A 1.0f
+#define SERVER_PORT 22311
 
 // Maximum number of players the server can handle
 // (somewhat arbitrary limit for simplicity, can be easily increased or decreased)
 #define MAX_PLAYERS 16
+
+// Interval at which to broadcast planet state snapshots to all clients (in seconds).
+#define PLANET_STATE_BROADCAST_INTERVAL (1.0f / 20.0f) // 20 Hz
 
 #endif // _SERVER_H_

@@ -376,6 +376,49 @@ void LevelRemoveStarship(Level *level, size_t index) {
 }
 
 /**
+ * Finds a faction by its ID within the level.
+ * @param level A pointer to the Level object.
+ * @param factionId The ID of the faction to locate.
+ * @return A pointer to the matching Faction, or NULL if not found.
+ */
+static const Faction *FindFactionById(const Level *level, int32_t factionId) {
+    // Basic validation of parameters.
+    if (level == NULL || level->factions == NULL) {
+        return NULL;
+    }
+
+    // Iterate over all factions to find the one with the matching ID.
+    for (size_t i = 0; i < level->factionCount; ++i) {
+        if (level->factions[i].id == factionId) {
+            return &level->factions[i];
+        }
+    }
+
+    // At this point, we've checked all factions and found no match.
+    return NULL;
+}
+
+/**
+ * Finds a planet by its index within the level.
+ * @param level A pointer to the Level object.
+ * @param index The index of the planet to retrieve.
+ * @return A pointer to the Planet, or NULL if the index is invalid.
+ */
+static Planet *FindPlanetByIndex(Level *level, size_t index) {
+    // Basic validation of parameters.
+    if (level == NULL || level->planets == NULL) {
+        return NULL;
+    }
+
+    if (index >= level->planetCount) {
+        return NULL;
+    }
+
+    // Return a pointer to the planet at the specified index.
+    return &level->planets[index];
+}
+
+/**
  * Updates the state of the level and its contained objects.
  * This function updates all planets and starships in the level.
  * It processes starship movements and checks for collisions with their target planets.
@@ -437,6 +480,193 @@ void LevelUpdate(Level *level, float deltaTime) {
         }
         ++i;
     }
+}
+
+/**
+ * Applies a full level packet to the provided Level instance.
+ * This populates factions, planets, and starships based on the packet data.
+ * Existing data in the level is replaced. The level must have been initialized.
+ * @param level A pointer to the Level object to populate.
+ * @param data A pointer to the packet data buffer.
+ * @param size Size of the packet data buffer in bytes.
+ * @return true if the packet was applied successfully, false otherwise.
+ */
+bool LevelApplyFullPacket(Level *level, const void *data, size_t size) {
+    // Basic validation of parameters.
+    if (level == NULL || data == NULL) {
+        return false;
+    }
+
+    if (size < sizeof(LevelFullPacket)) {
+        return false;
+    }
+
+    // Interpret the data as a LevelFullPacket.
+    const uint8_t *bytes = (const uint8_t *)data;
+    const LevelFullPacket *packet = (const LevelFullPacket *)bytes;
+    if (packet->type != LEVEL_PACKET_TYPE_FULL) {
+        return false;
+    }
+
+    // Extract counts from the packet.
+    size_t factionCount = (size_t)packet->factionCount;
+    size_t planetCount = (size_t)packet->planetCount;
+    size_t starshipCount = (size_t)packet->starshipCount;
+
+    // Calculate the required size for the full packet data.
+    size_t requiredSize = sizeof(LevelFullPacket)
+        + factionCount * sizeof(LevelPacketFactionInfo)
+        + planetCount * sizeof(LevelPacketPlanetFullInfo)
+        + starshipCount * sizeof(LevelPacketStarshipInfo);
+    
+    // If the provided size is less than the required size
+    // for the full packet, return false since the data is incomplete.
+    if (size < requiredSize) {
+        return false;
+    }
+
+    // We initialize the capacity for the starships array to either
+    // the number of starships in the packet, or 16 if there are none.
+    size_t desiredStarshipCapacity = starshipCount > 0 ? starshipCount : 16u;
+
+    // Configure the level with the extracted counts.
+    if (!LevelConfigure(level, factionCount, planetCount, desiredStarshipCapacity)) {
+        return false;
+    }
+
+    // Assign level dimensions from the packet.
+    level->width = packet->width;
+    level->height = packet->height;
+
+    // Using a cursor to traverse the packet data, we populate factions, planets, and starships.
+    const uint8_t *cursor = bytes + sizeof(LevelFullPacket);
+
+    // Populate factions.
+    const LevelPacketFactionInfo *factionInfo = (const LevelPacketFactionInfo *)cursor;
+    for (size_t i = 0; i < factionCount; ++i) {
+        level->factions[i].id = (int)factionInfo[i].id;
+        for (size_t c = 0; c < 4; ++c) {
+            level->factions[i].color[c] = factionInfo[i].color[c];
+        }
+    }
+
+    // Move the cursor past the faction data, to what better be planet data.
+    cursor += factionCount * sizeof(LevelPacketFactionInfo);
+    const LevelPacketPlanetFullInfo *planetInfo = (const LevelPacketPlanetFullInfo *)cursor;
+    for (size_t i = 0; i < planetCount; ++i) {
+        Planet *planet = &level->planets[i];
+        planet->position = planetInfo[i].position;
+        planet->maxFleetCapacity = planetInfo[i].maxFleetCapacity;
+        planet->currentFleetSize = planetInfo[i].currentFleetSize;
+        planet->owner = FindFactionById(level, planetInfo[i].ownerId);
+        planet->claimant = FindFactionById(level, planetInfo[i].claimantId);
+    }
+
+    // Move the cursor past the planet data, to what better be starship data.
+    cursor += planetCount * sizeof(LevelPacketPlanetFullInfo);
+    const LevelPacketStarshipInfo *starshipInfo = (const LevelPacketStarshipInfo *)cursor;
+
+    // Double check we have enough capacity for starships and trail effects 
+    // now that we have a second look at the starship count.
+    if (!EnsureStarshipCapacity(level, starshipCount)) {
+        return false;
+    }
+
+    // Ensure we have enough capacity for trail effects for the starships.
+    if (!EnsureTrailEffectCapacity(level, starshipCount)) {
+        return false;
+    }
+
+
+    // Populate starships.
+    level->starshipCount = starshipCount;
+    level->trailEffectCount = 0;
+
+    // Iterate over each starship info and create the corresponding starship
+    // using the provided data.
+    for (size_t i = 0; i < starshipCount; ++i) {
+        const LevelPacketStarshipInfo *info = &starshipInfo[i];
+        const Faction *owner = FindFactionById(level, info->ownerId);
+        Planet *target = NULL;
+        if (info->targetPlanetIndex >= 0) {
+            target = FindPlanetByIndex(level, (size_t)info->targetPlanetIndex);
+        }
+
+        Starship ship = CreateStarship(info->position, info->velocity, owner, target);
+        ship.position = info->position;
+        ship.velocity = info->velocity;
+        ship.owner = owner;
+        ship.target = target;
+        level->starships[i] = ship;
+    }
+
+    return true;
+}
+
+/**
+ * Applies a snapshot packet to the provided Level instance.
+ * Static level data (positions, faction colors, etc.) must already be present.
+ * Dynamic fields such as planet ownership, fleet sizes, and starships are
+ * overwritten with the data from the snapshot.
+ * @param level A pointer to the Level object to update.
+ * @param data A pointer to the packet data buffer.
+ * @param size Size of the packet data buffer in bytes.
+ * @return true if the packet was applied successfully, false otherwise.
+ */
+bool LevelApplySnapshot(Level *level, const void *data, size_t size) {
+    // Basic validation of parameters.
+    if (level == NULL || data == NULL) {
+        return false;
+    }
+
+    if (size < sizeof(LevelSnapshotPacket)) {
+        return false;
+    }
+
+    // Interpret the data as a LevelSnapshotPacket.
+    const uint8_t *bytes = (const uint8_t *)data;
+    const LevelSnapshotPacket *packet = (const LevelSnapshotPacket *)bytes;
+    if (packet->type != LEVEL_PACKET_TYPE_SNAPSHOT) {
+        return false;
+    }
+
+    // A snapshot packet only contains planet snapshot info.
+
+    // Extract planet count from the packet.
+    size_t planetCount = (size_t)packet->planetCount;
+
+    // Calculate the required size for the snapshot packet data.
+    size_t requiredSize = sizeof(LevelSnapshotPacket)
+        + planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
+
+    // If the provided size is less than the required size
+    // for the snapshot packet, return false since the data is incomplete.
+    if (size < requiredSize) {
+        return false;
+    }
+
+    // Make sure this local level instance is compatible with the snapshot data.
+    if (level->planets == NULL || level->factions == NULL) {
+        return false;
+    }
+
+    if (planetCount != level->planetCount) {
+        return false;
+    }
+
+    // Advance the cursor past the snapshot header to the planet snapshot info.
+    const uint8_t *cursor = bytes + sizeof(LevelSnapshotPacket);
+    const LevelPacketPlanetSnapshotInfo *planetInfo = (const LevelPacketPlanetSnapshotInfo *)cursor;
+
+    // For each planet, update its dynamic fields from the snapshot data.
+    for (size_t i = 0; i < planetCount; ++i) {
+        Planet *planet = &level->planets[i];
+        planet->currentFleetSize = planetInfo[i].currentFleetSize;
+        planet->owner = FindFactionById(level, planetInfo[i].ownerId);
+        planet->claimant = FindFactionById(level, planetInfo[i].claimantId);
+    }
+
+    return true;
 }
 
 /**
@@ -582,7 +812,8 @@ bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffe
 /**
  * Creates a level snapshot packet buffer for network transmission.
  * This function allocates memory for the packet buffer and fills it with
- * the dynamic state of the level, including planets and starships.
+ * the dynamic state of the level relevant to planets (ownership, fleets).
+ * Starships are intentionally excluded so clients can simulate them locally.
  * The caller is responsible for releasing the packet buffer using
  * LevelPacketBufferRelease when done.
  * @param level A pointer to the Level object.
@@ -605,12 +836,11 @@ bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outB
         return false;
     }
 
-    // We need to know how many planets and starships we have
+    // We only need to know how many planets we have
     size_t planetCount = level->planetCount;
-    size_t starshipCount = level->starshipCount;
 
-    // If any of these counts exceed UINT32_MAX, we cannot represent them in the packet
-    if (planetCount > UINT32_MAX || starshipCount > UINT32_MAX) {
+    // If the count exceeds UINT32_MAX, we cannot represent it in the packet
+    if (planetCount > UINT32_MAX) {
         return false;
     }
 
@@ -618,8 +848,7 @@ bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outB
     // It's a simple sum of the sizes of the header and all the arrays,
     // with each array itself simply being the count of elements times the size of each element.
     size_t totalSize = sizeof(LevelSnapshotPacket)
-        + planetCount * sizeof(LevelPacketPlanetSnapshotInfo)
-        + starshipCount * sizeof(LevelPacketStarshipInfo);
+        + planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
 
     // This will be the buffer that holds all our packet data.
     uint8_t *buffer = (uint8_t *)malloc(totalSize);
@@ -632,7 +861,6 @@ bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outB
     LevelSnapshotPacket *header = (LevelSnapshotPacket *)buffer;
     header->type = LEVEL_PACKET_TYPE_SNAPSHOT;
     header->planetCount = (uint32_t)planetCount;
-    header->starshipCount = (uint32_t)starshipCount;
 
     // Then we fill in the planet snapshot info array.
     uint8_t *cursor = buffer + sizeof(LevelSnapshotPacket);
@@ -642,18 +870,6 @@ bool LevelCreateSnapshotPacketBuffer(const Level *level, LevelPacketBuffer *outB
         planetInfo[i].currentFleetSize = planet->currentFleetSize;
         planetInfo[i].ownerId = ResolveFactionId(planet->owner);
         planetInfo[i].claimantId = ResolveFactionId(planet->claimant);
-    }
-
-    // Finally, we advance the cursor past the planet info array
-    // and fill in the starship info array.
-    cursor += planetCount * sizeof(LevelPacketPlanetSnapshotInfo);
-    LevelPacketStarshipInfo *starshipInfo = (LevelPacketStarshipInfo *)cursor;
-    for (size_t i = 0; i < starshipCount; ++i) {
-        const Starship *ship = &level->starships[i];
-        starshipInfo[i].position = ship->position;
-        starshipInfo[i].velocity = ship->velocity;
-        starshipInfo[i].ownerId = ResolveFactionId(ship->owner);
-        starshipInfo[i].targetPlanetIndex = ResolvePlanetIndex(level, ship->target);
     }
 
     // We've filled in the entire buffer now,

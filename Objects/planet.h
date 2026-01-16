@@ -101,6 +101,22 @@ void PlanetDraw(const Planet *planet);
 bool PlanetSendFleet(Planet *origin, Planet *destination, struct Level *level);
 
 /**
+ * Simulates sending a fleet from the origin planet to the destination planet.
+ * This function is similar to PlanetSendFleet but allows specifying the number of starships
+ * to send and an optional owner override for the spawned starships.
+ * This is useful for simulating fleet launches without altering the origin planet's state.
+ * @param origin A pointer to the origin Planet object.
+ * @param destination A pointer to the destination Planet object.
+ * @param level A pointer to the Level object where starships will be spawned.
+ * @param shipCount The number of starships to send.
+ * @param ownerOverride An optional pointer to the Faction that will own the spawned starships.
+ *                      If NULL, the origin planet's owner will be used.
+ * @return true if the fleet was successfully simulated, false otherwise.
+ */
+bool PlanetSimulateFleetLaunch(Planet *origin, Planet *destination, struct Level *level,
+    int shipCount, const Faction *ownerOverride);
+
+/**
  * Handles an incoming starship to the planet.
  * This function processes the interaction between the incoming starship and the planet.
  * Depending on the ownership and claimant status of the planet,

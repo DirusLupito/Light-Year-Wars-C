@@ -6,6 +6,8 @@
 
 #include "Utilities/networkUtilities.h"
 
+static void SendAssignmentPacket(Player *player, SOCKET sock);
+
 /**
  * Initializes Winsock.
  * @return true if successful, false otherwise.
@@ -123,4 +125,216 @@ bool CreateAddress(const char* ip, int port, SOCKADDR_IN* outAddr) {
         return false;
     }
     return true;
+}
+
+/**
+ * Sends a packet to a specific player containing the provided packet buffer,
+ * detailing some sort of update about the level state. See the LevelPacketBuffer
+ * structure definition in level.h for more information.
+ * @param player The player to send the packet to.
+ * @param sock The socket to use for sending.
+ * @param packet The packet buffer to send.
+ */
+void SendPacketToPlayer(Player *player, SOCKET sock, const LevelPacketBuffer *packet) {
+    // Basic validation of input pointers.
+    if (player == NULL || packet == NULL || packet->data == NULL) {
+        return;
+    }
+
+    // Check that the packet size is within valid limits for sendto.
+    if (packet->size > (size_t)INT_MAX) {
+        printf("Packet too large to send (size=%zu).\n", packet->size);
+        return;
+    }
+
+    // Send the packet data to the player's address using sendto.
+    int result = sendto(sock,
+        (const char *)packet->data,
+        (int)packet->size,
+        0,
+        (SOCKADDR *)&player->address,
+        (int)sizeof(player->address));
+
+    // Report any send errors.
+    if (result == SOCKET_ERROR) {
+        printf("sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Sends the full level packet to a specific player.
+ * Typically used when a player first joins the game or needs a full state update,
+ * so they can synchronize not only the dynamic elements but also the static layout of the level.
+ * @param player The player to send the packet to.
+ * @param sock The socket to use for sending.
+ * @param level The level whose full state is to be sent.
+ * @return true if the packet was sent successfully, false otherwise.
+ */
+bool SendFullPacketToPlayer(Player *player, SOCKET sock, const Level *level) {
+    // Basic validation of input pointers.
+    if (player == NULL || level == NULL) {
+        return false;
+    }
+
+    // Create the buffer for the full level packet.
+    LevelPacketBuffer packet;
+    if (!LevelCreateFullPacketBuffer(level, &packet)) {
+        printf("Failed to build full level packet.\n");
+        return false;
+    }
+
+    // Send the packet data to the player's address using sendto.
+    bool success = false;
+    if (packet.size <= (size_t)INT_MAX) {
+        int result = sendto(sock,
+            (const char *)packet.data,
+            (int)packet.size,
+            0,
+            (SOCKADDR *)&player->address,
+            (int)sizeof(player->address));
+
+        if (result != SOCKET_ERROR) {
+            success = true;
+            player->awaitingFullPacket = false;
+            SendAssignmentPacket(player, sock);
+        } else {
+            printf("sendto failed: %d\n", WSAGetLastError());
+        }
+    } else {
+        printf("Full packet too large to send (size=%zu).\n", packet.size);
+    }
+
+    // Free the memory allocated for the packet buffer, as it is no longer needed.
+    LevelPacketBufferRelease(&packet);
+    return success;
+}
+
+/**
+ * Broadcasts snapshot packets to all connected players.
+ * Used to keep all the clients up to date with the important dynamic state of the level.
+ * @param sock The socket to use for sending.
+ * @param level The level whose snapshot is to be sent.
+ * @param players The array of players to send the snapshot to.
+ * @param playerCount The number of players in the array.
+ */
+void BroadcastSnapshots(SOCKET sock, const Level *level, Player *players, size_t playerCount) {
+    // Basic validation of input pointers.
+    if (players == NULL || level == NULL || playerCount == 0) {
+        return;
+    }
+
+    // Create the buffer for the snapshot packet.
+    // While there is only one packet, it is sent to multiple players,
+    // for both the sake of efficiency and to ensure all players
+    // receive the exact same snapshot data. No player should 
+    // ever need a different snapshot than any other player
+    // with the current implementation.
+    // 
+    // Were something like fog of war implemented in the future,
+    // it might be necessary to create different snapshot packets
+    // for different players, depending on what they are allowed to see.
+    LevelPacketBuffer packet;
+    if (!LevelCreateSnapshotPacketBuffer(level, &packet)) {
+        printf("Failed to build snapshot packet.\n");
+        return;
+    }
+
+    // Iterate over all players and send them the snapshot packet.
+    for (size_t i = 0; i < playerCount; ++i) {
+        SendPacketToPlayer(&players[i], sock, &packet);
+    }
+
+    // Free the memory allocated for the packet buffer, as it is no longer needed.
+    LevelPacketBufferRelease(&packet);
+}
+
+/**
+ * Broadcasts a fleet launch packet to all connected players.
+ * Used to inform clients of a new fleet being launched from one planet to another
+ * so they can simulate its movement. This approach allows clients to remain synchronized
+ * with the server's authoritative game state, while also minimizing the amount of data sent,
+ * and letting them see the starships (which they would otherwise need several packets to describe).
+ * @param sock The socket to use for sending.
+ * @param players The array of players to send the packet to.
+ * @param playerCount The number of players in the array.
+ * @param originPlanetIndex The index of the origin planet.
+ * @param destinationPlanetIndex The index of the destination planet.
+ * @param shipCount The number of ships being launched.
+ * @param ownerFactionId The faction ID of the fleet owner.
+ */
+void BroadcastFleetLaunch(SOCKET sock, Player *players, size_t playerCount,
+    int32_t originPlanetIndex, int32_t destinationPlanetIndex,
+    int32_t shipCount, int32_t ownerFactionId) {
+    
+    // Basic validation of input pointers.
+    if (players == NULL || playerCount == 0) {
+        return;
+    }
+
+    // No point in sending a packet with zero or negative ships.
+    if (shipCount <= 0) {
+        return;
+    }
+
+    // Create the fleet launch packet.
+    // While there is only one packet, it is sent to multiple players,
+    // for both the sake of efficiency and to ensure all players
+    // receive the exact same snapshot data. No player should 
+    // ever need a different snapshot than any other player
+    // with the current implementation.
+    // 
+    // Were something like fog of war implemented in the future,
+    // it might be necessary to create different snapshot packets
+    // for different players, depending on whether they are allowed to see
+    // a faraway fleet launch or not.
+    LevelFleetLaunchPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_FLEET_LAUNCH;
+    packet.originPlanetIndex = originPlanetIndex;
+    packet.destinationPlanetIndex = destinationPlanetIndex;
+    packet.shipCount = shipCount;
+    packet.ownerFactionId = ownerFactionId;
+
+    // Iterate over all players and send them the fleet launch packet.
+    for (size_t i = 0; i < playerCount; ++i) {
+        int result = sendto(sock,
+            (const char *)&packet,
+            (int)sizeof(packet),
+            0,
+            (SOCKADDR *)&players[i].address,
+            (int)sizeof(players[i].address));
+
+        if (result == SOCKET_ERROR) {
+            printf("sendto failed: %d\n", WSAGetLastError());
+        }
+    }
+}
+
+/**
+ * Sends a level assignment packet to a specific player.
+ * This packet informs the player of their assigned faction ID.
+ * @param player The player to send the packet to.
+ * @param sock The socket to use for sending.
+ */
+static void SendAssignmentPacket(Player *player, SOCKET sock) {
+    // Basic validation of input pointers.
+    if (player == NULL) {
+        return;
+    }
+
+    // Create the level assignment packet.
+    LevelAssignmentPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_ASSIGNMENT;
+    packet.factionId = player->faction != NULL ? (int32_t)player->faction->id : -1;
+
+    // Send the assignment packet to the player's address using sendto.
+    int result = sendto(sock,
+        (const char *)&packet,
+        (int)sizeof(packet),
+        0,
+        (SOCKADDR *)&player->address,
+        (int)sizeof(player->address));
+
+    if (result == SOCKET_ERROR) {
+        printf("sendto failed: %d\n", WSAGetLastError());
+    }
 }
