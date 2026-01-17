@@ -11,11 +11,11 @@ OBJS_DIR = Objects
 
 # Source Files
 SERVER_SRC = $(SERVER_DIR)/server.c $(UTILS_DIR)/networkUtilities.c $(UTILS_DIR)/gameUtilities.c $(UTILS_DIR)/renderUtilities.c \
-		  $(UTILS_DIR)/openglUtilities.c \
+		  $(UTILS_DIR)/openglUtilities.c $(UTILS_DIR)/cameraUtilities.c \
 		  $(OBJS_DIR)/level.c $(OBJS_DIR)/planet.c $(OBJS_DIR)/starship.c $(OBJS_DIR)/vec2.c $(OBJS_DIR)/faction.c $(OBJS_DIR)/player.c 
 CLIENT_SRC = $(CLIENT_DIR)/client.c \
 	$(UTILS_DIR)/networkUtilities.c $(UTILS_DIR)/gameUtilities.c $(UTILS_DIR)/renderUtilities.c \
-	$(UTILS_DIR)/openglUtilities.c $(UTILS_DIR)/playerInterfaceUtilities.c \
+	$(UTILS_DIR)/openglUtilities.c $(UTILS_DIR)/cameraUtilities.c $(UTILS_DIR)/playerInterfaceUtilities.c \
 	$(OBJS_DIR)/level.c $(OBJS_DIR)/planet.c $(OBJS_DIR)/starship.c $(OBJS_DIR)/vec2.c $(OBJS_DIR)/faction.c $(OBJS_DIR)/player.c
 
 # Targets

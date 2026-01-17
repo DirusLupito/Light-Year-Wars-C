@@ -10,6 +10,7 @@
 #define _UNICODE
 #include <winsock2.h>
 #include <windows.h>
+#include <windowsx.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -24,6 +25,7 @@
 #include "Utilities/networkUtilities.h"
 #include "Utilities/renderUtilities.h"
 #include "Utilities/openglUtilities.h"
+#include "Utilities/cameraUtilities.h"
 #include "Objects/level.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
@@ -38,5 +40,24 @@
 
 // Interval at which to broadcast planet state snapshots to all clients (in seconds).
 #define PLANET_STATE_BROADCAST_INTERVAL (1.0f / 20.0f) // 20 Hz
+
+// Howfar the mouse must be from the edge of the window
+// before edge panning begins (in pixels).
+#define SERVER_CAMERA_EDGE_MARGIN 24.0f
+
+// Speed at which the camera pans when using keyboard input (in world units per second).
+#define SERVER_CAMERA_KEY_SPEED 480.0f
+
+// Speed at which the camera pans when using edge panning (in world units per second).
+#define SERVER_CAMERA_EDGE_SPEED 420.0f
+
+// Minimum zoom level for the camera.
+#define SERVER_CAMERA_MIN_ZOOM 0.5f
+
+// Maximum zoom level for the camera.
+#define SERVER_CAMERA_MAX_ZOOM 2.75f
+
+// How much the zoom changes each time a scroll of the mouse wheel is detected.
+#define SERVER_CAMERA_ZOOM_FACTOR 1.1f
 
 #endif // _SERVER_H_

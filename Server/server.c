@@ -28,12 +28,177 @@ static size_t playerCount = 0;
 static float planetStateAccumulator = 0.0f;
 static SOCKET server_socket = INVALID_SOCKET;
 
+// Camera state used for navigating the server's spectator view.
+static CameraState cameraState = {0};
+
 // Forward declarations of static functions
 static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
 static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
 static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
+static Vec2 ScreenToWorld(Vec2 screen);
+static void ClampCameraToLevel(void);
+static void RefreshCameraBounds(void);
+static void ApplyCameraTransform(void);
+static void UpdateCamera(HWND window_handle, float deltaTime);
+
+/**
+ * Converts screen coordinates to world coordinates using the current camera state.
+ * @param screen The screen coordinates to convert.
+ * @return The corresponding world coordinates.
+ */
+static Vec2 ScreenToWorld(Vec2 screen) {
+    return CameraScreenToWorld(&cameraState, screen);
+}
+
+/**
+ * Clamps the camera position to ensure it does not go outside the level bounds.
+ * Prevents losing track of where we are in the level by endlessly panning off into empty space.
+ */
+static void ClampCameraToLevel(void) {
+    // If the camera zoom is invalid or the viewport size is zero, there's nothing that needs to be done.
+    if (cameraState.zoom <= 0.0f || openglContext.width <= 0 || openglContext.height <= 0) {
+        return;
+    }
+
+    // Calculate the size of the viewport in world units, taking zoom levels into account.
+    float viewWidth = (float)openglContext.width / cameraState.zoom;
+    float viewHeight = (float)openglContext.height / cameraState.zoom;
+    CameraClampToBounds(&cameraState, viewWidth, viewHeight);
+}
+
+/**
+ * Refreshes the camera bounds based on the current level size.
+ * Should be called whenever the level is initialized or resized.
+ */
+static void RefreshCameraBounds(void) {
+    // Update the camera bounds to match the level dimensions.
+    CameraSetBounds(&cameraState, level.width, level.height);
+
+    // Clamp the camera position to ensure it is within the new bounds.
+    ClampCameraToLevel();
+}
+
+/**
+ * Applies the camera transformation to the current OpenGL modelview matrix.
+ * Sets up the scaling and translation based on the camera state.
+ */
+static void ApplyCameraTransform(void) {
+    // If the zoom level is invalid, do not apply any transformation.
+    if (cameraState.zoom <= 0.0f) {
+        return;
+    }
+
+    // Apply scaling and translation to the modelview matrix.
+    glScalef(cameraState.zoom, cameraState.zoom, 1.0f);
+
+    // Apply translation to position the camera correctly.
+    glTranslatef(-cameraState.position.x, -cameraState.position.y, 0.0f);
+}
+
+/**
+ * Updates the camera position based on user input.
+ * Supports keyboard panning and edge panning with the mouse.
+ * @param window_handle The handle to the application window.
+ * @param deltaTime The time elapsed since the last update, in seconds.
+ */
+static void UpdateCamera(HWND window_handle, float deltaTime) {
+    // If deltaTime is invalid, there's nothing to do.
+    if (deltaTime <= 0.0f) {
+        return;
+    }
+
+    // Determine if the window is active or has input capture.
+    bool hasCapture = GetCapture() == window_handle;
+    bool windowActive = GetForegroundWindow() == window_handle;
+
+    // Only allow camera movement if the window is active or has capture.
+    bool allowInput = windowActive || hasCapture;
+    if (!allowInput) {
+        return;
+    }
+
+    // Measure of how much to move the camera.
+    Vec2 displacement = Vec2Zero();
+
+    // Handle keyboard input for camera movement.
+    Vec2 keyDirection = Vec2Zero();
+
+    // GetAsyncKeyState determines whether a key is up or down at the time the function 
+    // is called the key, and whether it has been pressed since a previous call to GetAsyncKeyState.
+    // WASD or Arrow Keys: On QWERTY keyboards these are the standard movement keys.
+    // A = left, D = right, W = up, S = down.
+    if ((GetAsyncKeyState(VK_LEFT) & 0x8000) != 0 || (GetAsyncKeyState('A') & 0x8000) != 0) {
+        keyDirection.x -= 1.0f;
+    }
+
+    if ((GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0 || (GetAsyncKeyState('D') & 0x8000) != 0) {
+        keyDirection.x += 1.0f;
+    }
+
+    if ((GetAsyncKeyState(VK_UP) & 0x8000) != 0 || (GetAsyncKeyState('W') & 0x8000) != 0) {
+        keyDirection.y -= 1.0f;
+    }
+
+    if ((GetAsyncKeyState(VK_DOWN) & 0x8000) != 0 || (GetAsyncKeyState('S') & 0x8000) != 0) {
+        keyDirection.y += 1.0f;
+    }
+
+    // Normalize the direction and apply speed.
+    if (keyDirection.x != 0.0f || keyDirection.y != 0.0f) {
+        keyDirection = Vec2Normalize(keyDirection);
+        float keySpeed = SERVER_CAMERA_KEY_SPEED * deltaTime / cameraState.zoom;
+        displacement.x += keyDirection.x * keySpeed;
+        displacement.y += keyDirection.y * keySpeed;
+    }
+
+    // Handle edge panning based on mouse position.
+    POINT cursorPosition;
+    if (GetCursorPos(&cursorPosition)) {
+
+        // Convert the cursor position from screen coordinates to client coordinates.
+        POINT clientPoint = cursorPosition;
+        ScreenToClient(window_handle, &clientPoint);
+
+        // Only apply edge panning if input is allowed and the viewport size is valid.
+        if (openglContext.width > 0 && openglContext.height > 0) {
+
+             // Default is no direction
+            Vec2 edgeDirection = Vec2Zero();
+
+            // If the mouse is within CAMERA_EDGE_PAN_MARGIN pixels of any particular edge,
+            // with a preference for left/top edges when exactly on the margin of both sides,
+            // pan the camera in that direction.
+            if (clientPoint.x <= SERVER_CAMERA_EDGE_MARGIN) {
+                edgeDirection.x -= 1.0f;
+            } else if (clientPoint.x >= openglContext.width - SERVER_CAMERA_EDGE_MARGIN) {
+                edgeDirection.x += 1.0f;
+            }
+
+            if (clientPoint.y <= SERVER_CAMERA_EDGE_MARGIN) {
+                edgeDirection.y -= 1.0f;
+            } else if (clientPoint.y >= openglContext.height - SERVER_CAMERA_EDGE_MARGIN) {
+                edgeDirection.y += 1.0f;
+            }
+
+            // Normalize the direction and apply speed.
+            if (edgeDirection.x != 0.0f || edgeDirection.y != 0.0f) {
+                edgeDirection = Vec2Normalize(edgeDirection);
+                float edgeSpeed = SERVER_CAMERA_EDGE_SPEED * deltaTime / cameraState.zoom;
+                displacement.x += edgeDirection.x * edgeSpeed;
+                displacement.y += edgeDirection.y * edgeSpeed;
+            }
+        }
+    }
+
+    // If we are also doing box selection, update the current box selection position
+    // so that way the box can be drawn correctly.
+    if (displacement.x != 0.0f || displacement.y != 0.0f) {
+        cameraState.position = Vec2Add(cameraState.position, displacement);
+        ClampCameraToLevel();
+    }
+}
 
 /**
  * Window procedure that handles messages sent to the window.
@@ -81,12 +246,19 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // If we don't do this, the aspect ratio will be incorrect
             // and the rendered scene will appear stretched or squashed.
             OpenGLUpdateProjection(&openglContext, newWidth, newHeight);
+
+            // Update the camera bounds to match the new level size.
+            ClampCameraToLevel();
             return 0;
         }
         case WM_LBUTTONDOWN: {
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            Vec2 mousePos = {(float)x, (float)y};
+            // Get the mouse cursor position in client coordinates.
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+            Vec2 mouseScreen = {(float)x, (float)y};
+
+            // Then convert to world coordinates.
+            Vec2 mousePos = ScreenToWorld(mouseScreen);
 
             Planet *clicked = NULL;
             for (size_t i = 0; i < level.planetCount; ++i) {
@@ -113,6 +285,53 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
                 }
             } else {
                 selected_planet = NULL;
+            }
+            return 0;
+        }
+
+        // Mousewheel movement is for zooming the camera in and out.
+        case WM_MOUSEWHEEL: {
+
+            // The wheel delta indicates the amount and direction of wheel movement.
+            // A positive value indicates forward movement (away from the user),
+            // while a negative value indicates backward movement (towards the user).
+            // In typical RTS games, zooming out is done by scrolling the wheel backward (towards the user),
+            // and zooming in is done by scrolling the wheel forward (away from the user).
+            int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+
+            // No zoom change if there is no wheel movement.
+            if (wheelDelta == 0) {
+                return 0;
+            }
+
+            // Get the mouse cursor position in client coordinates.
+            POINT cursor = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(window_handle, &cursor);
+            Vec2 screen = {(float)cursor.x, (float)cursor.y};
+
+            // Determine the world position under the mouse cursor
+            // before changing the zoom level.
+            Vec2 focusWorld = ScreenToWorld(screen);
+
+            // Default target zoom is the current zoom.
+            float targetZoom = cameraState.zoom;
+
+            // Any wheel delta > 0 means zoom in, < 0 means zoom out.
+            // We don't care how far the wheel moved, just the direction.
+            if (wheelDelta > 0) {
+                targetZoom *= SERVER_CAMERA_ZOOM_FACTOR;
+            } else {
+                targetZoom /= SERVER_CAMERA_ZOOM_FACTOR;
+            }
+
+            // Apply the new zoom level to the camera.
+            float previousZoom = cameraState.zoom;
+            if (CameraSetZoom(&cameraState, targetZoom) && fabsf(cameraState.zoom - previousZoom) > 0.0001f) {
+                // To keep the point under the mouse cursor fixed in world space,
+                // we need to adjust the camera position accordingly.
+                cameraState.position.x = focusWorld.x - screen.x / cameraState.zoom;
+                cameraState.position.y = focusWorld.y - screen.y / cameraState.zoom;
+                ClampCameraToLevel();
             }
             return 0;
         }
@@ -537,9 +756,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     printf("Generating a random level...\n");
     LevelInit(&level);
-    float level_width = 800.0f;
-    float level_height = 600.0f;
-    GenerateRandomLevel(&level, 12, 2, 5.0f, 15.0f, level_width, level_height, 233);
+    CameraInitialize(&cameraState);
+    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
+    cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
+    float level_width = 1600.0f;
+    float level_height = 1200.0f;
+    GenerateRandomLevel(&level, 24, 4, 5.0f, 30.0f, level_width, level_height, 233);
+
+    // Once the level is generated, we can set the camera bounds.
+    RefreshCameraBounds();
 
     printf("Entering main program loop...\n");
 
@@ -647,6 +872,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         float delta_time = (float)(current_ticks - previous_ticks) / (float)frequency;
         previous_ticks = current_ticks;
 
+        // Update the camera based on input
+        UpdateCamera(window_handle, delta_time);
+
         // Update the level state
         LevelUpdate(&level, delta_time);
 
@@ -684,6 +912,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 // Draw the background gradient
                 DrawBackgroundGradient(openglContext.width, openglContext.height);
 
+                // Save the current matrix state
+                // before applying camera transformations
+                // as it may change the modelview matrix.
+                glPushMatrix();
+
+                // Apply camera transformations (translation and scaling)
+                // to allow for panning and zooming.
+                ApplyCameraTransform();
+
                 // Draw each planet in the level
                 for (size_t i = 0; i < level.planetCount; ++i) {
                     PlanetDraw(&level.planets[i]);
@@ -706,6 +943,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 for (size_t i = 0; i < level.starshipCount; ++i) {
                     StarshipDraw(&level.starships[i]);
                 }
+
+                // Restore the previous matrix state
+                glPopMatrix();
             }
 
             // Display FPS in the top-left corner
@@ -716,6 +956,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 // Text color is white
                 glColor3f(1.0f, 1.0f, 1.0f);
 
+                // Text only needs an identity modelview matrix
+                glLoadIdentity();
                 // Text position is 10 pixels from the left and 20 pixels from the top
                 glRasterPos2f(10.0f, 20.0f);
 

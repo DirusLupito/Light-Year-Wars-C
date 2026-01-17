@@ -68,17 +68,26 @@ static PlayerSelectionState selectionState = {0};
 // changes to the planets in that control group.
 static PlayerControlGroups controlGroups = {0};
 
+// Tracks the camera used for rendering and interaction.
+static CameraState cameraState = {0};
+
 // Indicates whether box selection mode is active.
 static bool boxSelectActive = false;
 
 // Indicates whether the player is currently dragging a box selection.
 static bool boxSelectDragging = false;
 
-// Starting position of the box selection drag. Will be filled in on a left mouse button down.
-static Vec2 boxSelectStart = {0.0f, 0.0f};
+// Starting position of the box selection drag in terms of screen coordinates.
+// Used to determine if the mouse has moved enough to be considered a drag.
+static Vec2 boxSelectStartScreen = {0.0f, 0.0f};
 
-// Current position of the box selection drag. Updated as the mouse moves.
-static Vec2 boxSelectCurrent = {0.0f, 0.0f};
+// Starting position of the box selection drag in terms of world coordinates.
+// Used for rendering the selection box and determining selected planets.
+static Vec2 boxSelectStartWorld = {0.0f, 0.0f};
+
+// Current position of the mouse during box selection drag in world coordinates.
+// Used for rendering the selection box and determining selected planets.
+static Vec2 boxSelectCurrentWorld = {0.0f, 0.0f};
 
 // -- Timing variables --
 
@@ -108,6 +117,12 @@ static void DrawSelectionBox(void);
 static void ApplyBoxSelection(bool additive);
 static void HandleClickSelection(Vec2 mousePos, bool additive);
 static int ControlGroupIndexFromKey(WPARAM key);
+static void UpdateCamera(HWND window_handle, float deltaTime);
+static void ClampCameraToLevel(void);
+static void ApplyCameraTransform(void);
+static Vec2 ScreenToWorld(Vec2 screen);
+static Vec2 WorldToScreen(Vec2 world);
+static void RefreshCameraBounds(void);
 
 /**
  * Helper function to draw selection highlights
@@ -183,11 +198,25 @@ static void DrawSelectionBox(void) {
         return;
     }
 
-    // Determine the corners of the selection box.
-    float minX = fminf(boxSelectStart.x, boxSelectCurrent.x);
-    float maxX = fmaxf(boxSelectStart.x, boxSelectCurrent.x);
-    float minY = fminf(boxSelectStart.y, boxSelectCurrent.y);
-    float maxY = fmaxf(boxSelectStart.y, boxSelectCurrent.y);
+    // Calculate the corners of the selection box in screen space.
+
+    // Minimum world coordinates of the selection box (smallest x and y).
+    Vec2 minWorld = {fminf(boxSelectStartWorld.x, boxSelectCurrentWorld.x),
+        fminf(boxSelectStartWorld.y, boxSelectCurrentWorld.y)};
+
+    // Maximum world coordinates of the selection box (largest x and y).
+    Vec2 maxWorld = {fmaxf(boxSelectStartWorld.x, boxSelectCurrentWorld.x),
+        fmaxf(boxSelectStartWorld.y, boxSelectCurrentWorld.y)};
+
+    // Convert world coordinates to screen coordinates for rendering.
+    Vec2 topLeft = WorldToScreen(minWorld);
+    Vec2 bottomRight = WorldToScreen(maxWorld);
+
+    // Determine the rectangle corners in screen space.
+    float minX = fminf(topLeft.x, bottomRight.x);
+    float maxX = fmaxf(topLeft.x, bottomRight.x);
+    float minY = fminf(topLeft.y, bottomRight.y);
+    float maxY = fmaxf(topLeft.y, bottomRight.y);
 
     // Outline color: same as the assigned faction color but more opaque.
     // Otherwise defaults to a blueish color.
@@ -232,10 +261,10 @@ static void ApplyBoxSelection(bool additive) {
     }
 
     // Determine the bounds of the selection box.
-    float minX = fminf(boxSelectStart.x, boxSelectCurrent.x);
-    float maxX = fmaxf(boxSelectStart.x, boxSelectCurrent.x);
-    float minY = fminf(boxSelectStart.y, boxSelectCurrent.y);
-    float maxY = fmaxf(boxSelectStart.y, boxSelectCurrent.y);
+    float minX = fminf(boxSelectStartWorld.x, boxSelectCurrentWorld.x);
+    float maxX = fmaxf(boxSelectStartWorld.x, boxSelectCurrentWorld.x);
+    float minY = fminf(boxSelectStartWorld.y, boxSelectCurrentWorld.y);
+    float maxY = fmaxf(boxSelectStartWorld.y, boxSelectCurrentWorld.y);
 
     // Iterate through all planets and select those within the box
     // that are owned by the local faction.
@@ -337,6 +366,202 @@ static Planet *PickPlanetAt(Vec2 position, size_t *outIndex) {
 }
 
 /**
+ * Helper function to convert screen coordinates to world coordinates
+ * using the current camera state.
+ * Used when interpreting mouse positions into something like selections in the worlds space.
+ * @param screen The screen coordinates to convert.
+ * @return The corresponding world coordinates.
+ */
+static Vec2 ScreenToWorld(Vec2 screen) {
+    return CameraScreenToWorld(&cameraState, screen);
+}
+
+/**
+ * Helper function to convert world coordinates to screen coordinates
+ * using the current camera state.
+ * Used when rendering world objects to the screen.
+ * @param world The world coordinates to convert.
+ * @return The corresponding screen coordinates.
+ */
+static Vec2 WorldToScreen(Vec2 world) {
+    return CameraWorldToScreen(&cameraState, world);
+}
+
+/**
+ * Helper function to clamp the camera position
+ * to ensure it does not go outside the level bounds.
+ * Prevents players from losing track of where they are in the level
+ * by endlessly panning the camera off into empty space.
+ */
+static void ClampCameraToLevel(void) {
+    // If the camera zoom is invalid or the viewport size is zero,
+    // there's nothing that needs to be done.
+    if (cameraState.zoom <= 0.0f || openglContext.width <= 0 || openglContext.height <= 0) {
+        return;
+    }
+
+    // Calculate the size of the viewport in world units,
+    // taking zoom levels into account.
+    float viewWidth = (float)openglContext.width / cameraState.zoom;
+    float viewHeight = (float)openglContext.height / cameraState.zoom;
+
+    // Delegate to the utility function to clamp the camera position.
+    CameraClampToBounds(&cameraState, viewWidth, viewHeight);
+}
+
+/**
+ * Helper function to refresh the camera bounds
+ * based on the current level size.
+ * Should be called whenever the level is initialized or resized.
+ */
+static void RefreshCameraBounds(void) {
+    // Set the camera bounds to match the level dimensions.
+    CameraSetBounds(&cameraState, level.width, level.height);
+
+    // Clamp the camera position to ensure it is within the new bounds.
+    ClampCameraToLevel();
+}
+
+/**
+ * Helper function to apply the camera transformation
+ * to the current OpenGL modelview matrix.
+ * Sets up the scaling and translation based on the camera state.
+ * Used when panning or zooming the view.
+ */
+static void ApplyCameraTransform(void) {
+    // If the camera zoom is less than zero,
+    // there's nothing to see.
+    if (cameraState.zoom <= 0.0f) {
+        return;
+    }
+
+    // Scale the view according to the zoom level,
+    glScalef(cameraState.zoom, cameraState.zoom, 1.0f);
+
+    // Then translate the view to center on the camera position.
+    glTranslatef(-cameraState.position.x, -cameraState.position.y, 0.0f);
+}
+
+/**
+ * Helper function to update the camera position
+ * based on user input and elapsed time.
+ * Supports keyboard panning and edge panning.
+ * @param window_handle The handle to the application window.
+ * @param deltaTime The time elapsed since the last update, in seconds.
+ */
+static void UpdateCamera(HWND window_handle, float deltaTime) {
+    // If the level is not initialized or deltaTime is invalid,
+    // there's nothing to do.
+    if (!levelInitialized || deltaTime <= 0.0f) {
+        return;
+    }
+
+    // Determine if the window is active or has input capture.
+    bool hasCapture = GetCapture() == window_handle;
+    bool windowActive = GetForegroundWindow() == window_handle;
+
+    // Only allow camera movement if the window is active or has capture.
+    bool allowInput = windowActive || hasCapture;
+
+    // Used to compute how much to move the camera.
+    Vec2 displacement = Vec2Zero();
+
+    // Handle keyboard input for panning.
+    if (allowInput) {
+        // Default is no direction
+        Vec2 keyDirection = Vec2Zero();
+
+        // GetAsyncKeyState determines whether a key is up or down at the time the function 
+        // is called the key, and whether it has been pressed since a previous call to GetAsyncKeyState.
+        // WASD or Arrow Keys: On QWERTY keyboards these are the standard movement keys.
+        // A = left, D = right, W = up, S = down.
+        if ((GetAsyncKeyState(VK_LEFT) & 0x8000) != 0 || (GetAsyncKeyState('A') & 0x8000) != 0) {
+            keyDirection.x -= 1.0f;
+        }
+
+        if ((GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0 || (GetAsyncKeyState('D') & 0x8000) != 0) {
+            keyDirection.x += 1.0f;
+        }
+
+        if ((GetAsyncKeyState(VK_UP) & 0x8000) != 0 || (GetAsyncKeyState('W') & 0x8000) != 0) {
+            keyDirection.y -= 1.0f;
+        }
+        
+        if ((GetAsyncKeyState(VK_DOWN) & 0x8000) != 0 || (GetAsyncKeyState('S') & 0x8000) != 0) {
+            keyDirection.y += 1.0f;
+        }
+
+        // Normalize the direction and apply speed.
+        if (keyDirection.x != 0.0f || keyDirection.y != 0.0f) {
+            keyDirection = Vec2Normalize(keyDirection);
+            float speed = CAMERA_KEY_PAN_SPEED * deltaTime / cameraState.zoom;
+            displacement.x += keyDirection.x * speed;
+            displacement.y += keyDirection.y * speed;
+        }
+    }
+
+    // Handle edge panning based on mouse position.
+    POINT cursorPosition;
+    if (GetCursorPos(&cursorPosition)) {
+
+        // Convert the cursor position from screen coordinates to client coordinates.
+        POINT clientPoint = cursorPosition;
+        ScreenToClient(window_handle, &clientPoint);
+
+        // Only apply edge panning if input is allowed and the viewport size is valid.
+        if (allowInput && openglContext.width > 0 && openglContext.height > 0) {
+
+            // Default is no direction
+            Vec2 edgeDirection = Vec2Zero();
+
+            // If the mouse is within CAMERA_EDGE_PAN_MARGIN pixels of any particular edge,
+            // with a preference for left/top edges when exactly on the margin of both sides,
+            // pan the camera in that direction.
+            if (clientPoint.x <= CAMERA_EDGE_PAN_MARGIN) {
+                edgeDirection.x -= 1.0f;
+            } else if (clientPoint.x >= openglContext.width - CAMERA_EDGE_PAN_MARGIN) {
+                edgeDirection.x += 1.0f;
+            }
+
+            if (clientPoint.y <= CAMERA_EDGE_PAN_MARGIN) {
+                edgeDirection.y -= 1.0f;
+            } else if (clientPoint.y >= openglContext.height - CAMERA_EDGE_PAN_MARGIN) {
+                edgeDirection.y += 1.0f;
+            }
+
+            // Normalize the direction and apply speed.
+            if (edgeDirection.x != 0.0f || edgeDirection.y != 0.0f) {
+                edgeDirection = Vec2Normalize(edgeDirection);
+                float speed = CAMERA_EDGE_PAN_SPEED * deltaTime / cameraState.zoom;
+                displacement.x += edgeDirection.x * speed;
+                displacement.y += edgeDirection.y * speed;
+            }
+        }
+
+        // If we are also doing box selection, update the current box selection position
+        // so that way the box can be drawn correctly.
+        if (boxSelectActive) {
+            Vec2 screen = {(float)clientPoint.x, (float)clientPoint.y};
+            boxSelectCurrentWorld = ScreenToWorld(screen);
+
+            if (!boxSelectDragging) {
+                float dx = screen.x - boxSelectStartScreen.x;
+                float dy = screen.y - boxSelectStartScreen.y;
+                if (fabsf(dx) >= BOX_SELECT_DRAG_THRESHOLD || fabsf(dy) >= BOX_SELECT_DRAG_THRESHOLD) {
+                    boxSelectDragging = true;
+                }
+            }
+        }
+    }
+
+    // If there is any displacement, update the camera position
+    if (displacement.x != 0.0f || displacement.y != 0.0f) {
+        cameraState.position = Vec2Add(cameraState.position, displacement);
+        ClampCameraToLevel();
+    }
+}
+
+/**
  * Helper function to resolve a faction by its ID.
  * Searches the current level's factions for a matching ID.
  * @param factionId The ID of the faction to find.
@@ -406,6 +631,11 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     // Reset box selection state.
     boxSelectActive = false;
     boxSelectDragging = false;
+
+    // Reset camera to default position and zoom.
+    cameraState.position = Vec2Zero();
+    CameraSetZoom(&cameraState, 1.0f);
+    RefreshCameraBounds();
     RefreshLocalFaction();
 }
 
@@ -431,6 +661,9 @@ static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length) {
     // We successfully applied the snapshot,
     // make sure that the local faction pointer is up to date.
     RefreshLocalFaction();
+
+    // And refresh camera bounds in case the level size changed.
+    RefreshCameraBounds();
 }
 
 /**
@@ -701,6 +934,11 @@ static void RenderFrame(float fps) {
 
         // If the level is initialized, draw the planets, starships, and starship trails.
         if (levelInitialized) {
+            // Save the current matrix state.
+            glPushMatrix();
+
+            // Then apply the current camera settings to update the view.
+            ApplyCameraTransform();
 
             // Draw each planet in the level.
             for (size_t i = 0; i < level.planetCount; ++i) {
@@ -719,6 +957,9 @@ static void RenderFrame(float fps) {
             for (size_t i = 0; i < level.starshipCount; ++i) {
                 StarshipDraw(&level.starships[i]);
             }
+
+            // Restore the previous matrix state.
+            glPopMatrix();
         }
     }
 
@@ -742,6 +983,9 @@ static void RenderFrame(float fps) {
 
         // White color for text
         glColor3f(1.0f, 1.0f, 1.0f);
+
+        // Identity modelview matrix for 2D text rendering.
+        glLoadIdentity();
 
         // Set the raster position for the first line of text (FPS)
         // 10 pixels from the left, 20 pixels from the top
@@ -822,6 +1066,7 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // If we don't do this, the aspect ratio will be incorrect
             // and the rendered scene will appear stretched or squashed.
             OpenGLUpdateProjection(&openglContext, newWidth, newHeight);
+            ClampCameraToLevel();
             return 0;
         }
 
@@ -835,15 +1080,17 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             // Get the mouse position from lParam.
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-
-            // Capture the starting position for box selection.
-            boxSelectStart.x = (float)x;
-            boxSelectStart.y = (float)y;
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+            Vec2 screen = {(float)x, (float)y};
 
             // Initialize box selection state.
-            boxSelectCurrent = boxSelectStart;
+            boxSelectStartScreen = screen;
+
+            // Convert screen coordinates to world coordinates.
+            boxSelectStartWorld = ScreenToWorld(screen);
+            boxSelectCurrentWorld = boxSelectStartWorld;
+
             boxSelectActive = true;
             boxSelectDragging = false;
 
@@ -863,16 +1110,16 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             // Get the current mouse position from lParam.
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            boxSelectCurrent.x = (float)x;
-            boxSelectCurrent.y = (float)y;
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+            Vec2 screen = {(float)x, (float)y};
+            boxSelectCurrentWorld = ScreenToWorld(screen);
 
             // If the mouse has not yet moved enough to be considered dragging,
             // check if it has now exceeded the drag threshold.
             if (!boxSelectDragging) {
-                float dx = boxSelectCurrent.x - boxSelectStart.x;
-                float dy = boxSelectCurrent.y - boxSelectStart.y;
+                float dx = screen.x - boxSelectStartScreen.x;
+                float dy = screen.y - boxSelectStartScreen.y;
                 if (fabsf(dx) >= BOX_SELECT_DRAG_THRESHOLD || fabsf(dy) >= BOX_SELECT_DRAG_THRESHOLD) {
                     // If so, mark as dragging so we can start drawing the selection box
                     // and apply box selection on mouse up.
@@ -892,10 +1139,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             // Get the mouse position from lParam.
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            Vec2 mousePos = {(float)x, (float)y};
-            boxSelectCurrent = mousePos;
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+            Vec2 screen = {(float)x, (float)y};
+            Vec2 mouseWorld = ScreenToWorld(screen);
+            boxSelectCurrentWorld = mouseWorld;
 
             // If the clicked (boxed) planet (planets) is (are) not owned by the local faction,
             // and the Shift key is not pressed, clear the current selection.
@@ -911,7 +1159,7 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
                 ApplyBoxSelection(additive);
             } else {
                 // Otherwise, we treat it as a click selection.
-                HandleClickSelection(mousePos, additive);
+                HandleClickSelection(mouseWorld, additive);
             }
 
             // Regardless of what happened, end box selection state.
@@ -928,9 +1176,10 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             // Get the mouse position from lParam.
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            Vec2 mousePos = {(float)x, (float)y};
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+            Vec2 screen = {(float)x, (float)y};
+            Vec2 mousePos = ScreenToWorld(screen);
 
             // Get the planet at the mouse position, if any.
             size_t planetIndex = 0;
@@ -946,6 +1195,57 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // clients. This is to ensure consistency between all clients.
             const SOCKADDR_IN *targetAddress = serverAddressValid ? &serverAddress : NULL;
             PlayerSendMoveOrder(&selectionState, clientSocket, targetAddress, &level, planetIndex);
+            return 0;
+        }
+
+        // Mousewheel movement is for zooming the camera in and out.
+        case WM_MOUSEWHEEL: {
+            // Nothing to zoom if no level is initialized.
+            if (!levelInitialized) {
+                return 0;
+            }
+
+            // The wheel delta indicates the amount and direction of wheel movement.
+            // A positive value indicates forward movement (away from the user),
+            // while a negative value indicates backward movement (towards the user).
+            // In typical RTS games, zooming out is done by scrolling the wheel backward (towards the user),
+            // and zooming in is done by scrolling the wheel forward (away from the user).
+            int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+
+            // No zoom change if there is no wheel movement.
+            if (wheelDelta == 0) {
+                return 0;
+            }
+
+            // Get the mouse cursor position in client coordinates.
+            POINT cursor = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(window_handle, &cursor);
+            Vec2 screen = {(float)cursor.x, (float)cursor.y};
+
+            // Determine the world position under the mouse cursor
+            // before changing the zoom level.
+            Vec2 focusWorld = ScreenToWorld(screen);
+
+            // Default target zoom is the current zoom.
+            float targetZoom = cameraState.zoom;
+
+            // Any wheel delta > 0 means zoom in, < 0 means zoom out.
+            // We don't care how far the wheel moved, just the direction.
+            if (wheelDelta > 0) {
+                targetZoom *= CAMERA_ZOOM_FACTOR;
+            } else {
+                targetZoom /= CAMERA_ZOOM_FACTOR;
+            }
+
+            // Apply the new zoom level to the camera.
+            float previousZoom = cameraState.zoom;
+            if (CameraSetZoom(&cameraState, targetZoom) && fabsf(cameraState.zoom - previousZoom) > 0.0001f) {
+                // To keep the point under the mouse cursor fixed in world space,
+                // we need to adjust the camera position accordingly.
+                cameraState.position.x = focusWorld.x - screen.x / cameraState.zoom;
+                cameraState.position.y = focusWorld.y - screen.y / cameraState.zoom;
+                ClampCameraToLevel();
+            }
             return 0;
         }
 
@@ -1032,6 +1332,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     // Initialize the level structure
     // so that it is ready to be used when we receive data from the server.
     LevelInit(&level);
+
+    // Initialize the camera state.
+    CameraInitialize(&cameraState);
+    cameraState.minZoom = CAMERA_MIN_ZOOM;
+    cameraState.maxZoom = CAMERA_MAX_ZOOM;
 
     // Ask the user for the server address.
     if (!PromptForServerAddress()) {
@@ -1159,6 +1464,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         int64_t currentTicks = GetTicks();
         float deltaTime = (float)(currentTicks - previousTicks) / (float)tickFrequency;
         previousTicks = currentTicks;
+
+        // Update the camera based on user input and elapsed time.
+        UpdateCamera(window_handle, deltaTime);
 
         // If we have a level and time has passed, we must update the level state.
         if (levelInitialized && deltaTime > 0.0f) {

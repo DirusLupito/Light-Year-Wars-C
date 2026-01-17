@@ -382,6 +382,15 @@ void DrawBackgroundGradient(int width, int height) {
 void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
     const float outlineColor[4], const float fillColor[4]) {
 
+        // Like glPushAttrib/glPopAttrib, glPushMatrix/glPopMatrix
+        // allow us to save and restore the current OpenGL state.
+        glPushMatrix();
+
+        // We use the identity matrix as our modelview matrix
+        // since we do not want to do any weird transformations to
+        // our selection box; it's just a box.
+        glLoadIdentity();
+
         // glPushAttrib tells OpenGL to save the current state of certain attributes,
         // in this case, the enable state and color buffer state.
         // This is done in order to modify these states for our drawing operations
@@ -412,4 +421,7 @@ void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
 
         // glPopAttrib restores the previously saved OpenGL state.
         glPopAttrib();
+
+        // glPopMatrix restores the previous matrix state.
+        glPopMatrix();
     }
