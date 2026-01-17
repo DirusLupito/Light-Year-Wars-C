@@ -135,6 +135,305 @@ void PlayerSelectionFree(PlayerSelectionState *state) {
 }
 
 /**
+ * Sets the selection state of the specified planet.
+ * @param state Pointer to the PlayerSelectionState to modify.
+ * @param index Index of the planet.
+ * @param selected true to select, false to deselect.
+ * @return true if the operation succeeded, false otherwise.
+ */
+bool PlayerSelectionSet(PlayerSelectionState *state, size_t index, bool selected) {
+    // Basic validation of input parameters.
+    if (state == NULL || state->selectedPlanets == NULL || index >= state->capacity) {
+        return false;
+    }
+
+    // If the planet is already in the desired state, nothing to do.
+    bool current = state->selectedPlanets[index];
+    if (current == selected) {
+        return true;
+    }
+
+    // Otherwise, set the selection state and 
+    // increment/decrement the count of selected planets
+    // accordingly.
+    state->selectedPlanets[index] = selected;
+    if (selected) {
+        state->count += 1;
+    } else if (state->count > 0) {
+        state->count -= 1;
+    }
+    return true;
+}
+
+/**
+ * Selects all planets owned by the specified faction.
+ * @param state Pointer to the PlayerSelectionState to update.
+ * @param level Pointer to the current Level structure.
+ * @param owner Pointer to the owning faction.
+ * @param additive When true the owned planets are added to the existing selection.
+ * @return true if at least one owned planet was processed, false otherwise.
+ */
+bool PlayerSelectionSelectOwned(PlayerSelectionState *state,
+    const Level *level,
+    const Faction *owner,
+    bool additive) {
+
+    // Basic validation of input parameters.
+    if (state == NULL || level == NULL || owner == NULL) {
+        return false;
+    }
+
+    // If there is no selection buffer, nothing can be selected.
+    if (state->selectedPlanets == NULL || state->capacity == 0) {
+        return false;
+    }
+
+    // If not additive, clear the existing selection first.
+    if (!additive) {
+        PlayerSelectionClear(state);
+    }
+
+    // Iterate through all planets and select those owned by the specified faction.
+    // It's possible for this function to be called with planets selected 
+    // which do not belong to the specified faction as for example the player might
+    // have had some selected, then lost control of them with that same selection active.
+    size_t processed = 0;
+
+    // Limit the iteration to the smaller of the level's planet count
+    // or the selection state's capacity to avoid out-of-bounds access.
+    size_t limit = level->planetCount < state->capacity ? level->planetCount : state->capacity;
+    for (size_t i = 0; i < limit; ++i) {
+        if (level->planets[i].owner == owner) {
+            PlayerSelectionSet(state, i, true);
+            processed += 1;
+        }
+    }
+
+    // Return true if at least one owned planet was processed.
+    return processed > 0;
+}
+
+/**
+ * Resizes the control group buffers to accommodate the provided planet count.
+ * Existing data is cleared when the capacity changes.
+ * @param groups Pointer to the PlayerControlGroups to reset.
+ * @param planetCount Number of planets to support.
+ * @return true on success, false otherwise.
+ */
+bool PlayerControlGroupsReset(PlayerControlGroups *groups, size_t planetCount) {
+    // Basic validation of input pointer.
+    if (groups == NULL) {
+        return false;
+    }
+
+    // If planetCount is zero, free all existing buffers and set capacity to zero.
+    if (planetCount == 0) {
+        for (size_t i = 0; i < PLAYER_MAX_CONTROL_GROUPS; ++i) {
+            free(groups->groups[i]);
+            groups->groups[i] = NULL;
+        }
+        groups->capacity = 0;
+        return true;
+    }
+
+    // Otherwise, if the capacity is changing, reallocate all buffers.
+    if (groups->capacity != planetCount) {
+
+        // For each control group, free any existing buffer.
+        for (size_t i = 0; i < PLAYER_MAX_CONTROL_GROUPS; ++i) {
+            free(groups->groups[i]);
+            groups->groups[i] = NULL;
+        }
+
+        // For each control group, allocate a new buffer
+        // sized to hold planetCount booleans.
+        for (size_t i = 0; i < PLAYER_MAX_CONTROL_GROUPS; ++i) {
+            groups->groups[i] = (bool *)calloc(planetCount, sizeof(bool));
+
+            // If any allocation fails, free all previously allocated buffers
+            // and set capacity to zero before returning failure.
+            if (groups->groups[i] == NULL) {
+                printf("Failed to allocate control group buffer :(.\n");
+                for (size_t j = 0; j <= i; ++j) {
+                    free(groups->groups[j]);
+                    groups->groups[j] = NULL;
+                }
+                groups->capacity = 0;
+                return false;
+            }
+        }
+
+        // Mark the control groups as being able to track planetCount planets.
+        groups->capacity = planetCount;
+        return true;
+    }
+
+    // If the capacity is unchanged, simply clear all existing buffers.
+    for (size_t i = 0; i < PLAYER_MAX_CONTROL_GROUPS; ++i) {
+        if (groups->groups[i] != NULL) {
+            memset(groups->groups[i], 0, planetCount * sizeof(bool));
+        }
+    }
+    return true;
+}
+
+/**
+ * Releases memory owned by the control groups structure.
+ * @param groups Pointer to the PlayerControlGroups to free.
+ */
+void PlayerControlGroupsFree(PlayerControlGroups *groups) {
+    // Basic validation of input pointer.
+    if (groups == NULL) {
+        return;
+    }
+
+    // Free each control group buffer if it exists,
+    for (size_t i = 0; i < PLAYER_MAX_CONTROL_GROUPS; ++i) {
+        free(groups->groups[i]);
+        groups->groups[i] = NULL;
+    }
+
+    // Reset capacity to zero.
+    groups->capacity = 0;
+}
+
+/**
+ * Replaces the specified control group with the current selection.
+ * @param groups Pointer to the PlayerControlGroups to modify.
+ * @param groupIndex Index of the control group (0-9).
+ * @param selection Pointer to the current selection state.
+ * @return true if the group was updated, false otherwise.
+ */
+bool PlayerControlGroupsOverwrite(PlayerControlGroups *groups,
+    size_t groupIndex,
+    const PlayerSelectionState *selection) {
+
+    // Basic validation of input parameters.
+    if (groups == NULL || selection == NULL || groupIndex >= PLAYER_MAX_CONTROL_GROUPS) {
+        return false;
+    }
+
+    // If the control group buffer does not exist, cannot overwrite.
+    if (groups->capacity == 0 || groups->groups[groupIndex] == NULL) {
+        return false;
+    }
+
+    // Clear the existing control group selection by setting all booleans to false (0).
+    memset(groups->groups[groupIndex], 0, groups->capacity * sizeof(bool));
+
+    // If there is no selection buffer, nothing to add.
+    // So the control group is now empty.
+    if (selection->selectedPlanets == NULL || selection->capacity == 0) {
+        return true;
+    }
+
+    // Iterate through the selection and copy selected planets into the control group.
+    size_t limit = selection->capacity < groups->capacity ? selection->capacity : groups->capacity;
+    for (size_t i = 0; i < limit; ++i) {
+        if (selection->selectedPlanets[i]) {
+            groups->groups[groupIndex][i] = true;
+        }
+    }
+    return true;
+}
+
+/**
+ * Adds the planets from the current selection into the specified control group.
+ * @param groups Pointer to the PlayerControlGroups to modify.
+ * @param groupIndex Index of the control group (0-9).
+ * @param selection Pointer to the current selection state.
+ * @return true if the group was updated, false otherwise.
+ */
+bool PlayerControlGroupsAdd(PlayerControlGroups *groups,
+    size_t groupIndex,
+    const PlayerSelectionState *selection) {
+
+    // Basic validation of input parameters.
+    if (groups == NULL || selection == NULL || groupIndex >= PLAYER_MAX_CONTROL_GROUPS) {
+        return false;
+    }
+
+    // If the control group buffer does not exist, cannot add to it.
+    if (groups->capacity == 0 || groups->groups[groupIndex] == NULL) {
+        return false;
+    }
+
+    // If there is no selection buffer, nothing to add.
+    if (selection->selectedPlanets == NULL || selection->capacity == 0) {
+        return true;
+    }
+
+    // Iterate through the selection and copy selected planets into the control group.
+    // A more efficient approach might find some way to efficiently extract out only planets
+    // not already in the control group, and then iterate over only those, but this function
+    // is hardly going to be a performance bottleneck in practice even with this simple approach.
+    size_t limit = selection->capacity < groups->capacity ? selection->capacity : groups->capacity;
+    for (size_t i = 0; i < limit; ++i) {
+        if (selection->selectedPlanets[i]) {
+            groups->groups[groupIndex][i] = true;
+        }
+    }
+    return true;
+}
+
+/**
+ * Applies the specified control group to the current selection, filtering by ownership.
+ * @param groups Pointer to the PlayerControlGroups to read from.
+ * @param groupIndex Index of the control group (0-9).
+ * @param level Pointer to the current Level structure.
+ * @param owner Pointer to the owning faction.
+ * @param selection Pointer to the selection state to update.
+ * @param additive When true the group's planets are added to the existing selection.
+ * @return true if at least one planet was selected, false otherwise.
+ */
+bool PlayerControlGroupsApply(const PlayerControlGroups *groups,
+    size_t groupIndex,
+    const Level *level,
+    const Faction *owner,
+    PlayerSelectionState *selection,
+    bool additive) {
+
+    // Basic validation of input parameters.
+    if (groups == NULL || level == NULL || owner == NULL || selection == NULL) {
+        return false;
+    }
+
+    // If the control group buffer does not exist, cannot apply.
+    if (groupIndex >= PLAYER_MAX_CONTROL_GROUPS) {
+        return false;
+    }
+
+    if (groups->capacity == 0 || groups->groups[groupIndex] == NULL) {
+        return false;
+    }
+
+    if (selection->selectedPlanets == NULL || selection->capacity == 0) {
+        return false;
+    }
+
+    // If not additive, clear the existing selection first.
+    if (!additive) {
+        PlayerSelectionClear(selection);
+    }
+
+    // Iterate through the specified control group and add owned planets to the selection.
+    size_t limit = level->planetCount < groups->capacity ? level->planetCount : groups->capacity;
+    size_t selectedCount = 0;
+    for (size_t i = 0; i < limit; ++i) {
+        if (!groups->groups[groupIndex][i]) {
+            continue;
+        }
+        if (level->planets[i].owner != owner) {
+            continue;
+        }
+        if (PlayerSelectionSet(selection, i, true)) {
+            selectedCount += 1;
+        }
+    }
+    return selectedCount > 0;
+}
+
+/**
  * Sends a move order to the server for the selected planets
  * to move fleets to the specified destination planet.
  * @param state Pointer to the PlayerSelectionState containing selected planets.

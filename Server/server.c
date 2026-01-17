@@ -539,7 +539,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     LevelInit(&level);
     float level_width = 800.0f;
     float level_height = 600.0f;
-    GenerateRandomLevel(&level, 12, 2, 5.0f, 15.0f, level_width, level_height, 0);
+    GenerateRandomLevel(&level, 12, 2, 5.0f, 15.0f, level_width, level_height, 233);
 
     printf("Entering main program loop...\n");
 

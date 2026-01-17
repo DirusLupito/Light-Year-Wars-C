@@ -24,5 +24,12 @@
 #include "Utilities/renderUtilities.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
+#include "Utilities/openglUtilities.h"
+#include "Utilities/playerInterfaceUtilities.h"
+
+// Minimum distance in pixels the mouse must move
+// for a left button drag to be considered a box selection 
+// rather than a simple click upon LMB release.
+#define BOX_SELECT_DRAG_THRESHOLD 6.0f
 
 #endif // _CLIENT_H_

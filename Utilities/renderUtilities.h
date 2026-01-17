@@ -130,4 +130,18 @@ int ComputeCircleSegments(float radius);
  */
 void DrawBackgroundGradient(int width, int height);
 
+/**
+ * Helper function to draw an outlined rectangle using
+ * the given outline and fill colors at the specified coordinates.
+ * Helpful for drawing the selection box during box selection.
+ * @param x1 The x-coordinate of one corner of the box.
+ * @param y1 The y-coordinate of one corner of the box.
+ * @param x2 The x-coordinate of the opposite corner of the box.
+ * @param y2 The y-coordinate of the opposite corner of the box.
+ * @param outlineColor The RGBA color of the box outline.
+ * @param fillColor The RGBA color of the box fill.
+ */
+void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
+    const float outlineColor[4], const float fillColor[4]);
+
 #endif // _RENDER_UTILITIES_H_

@@ -5,8 +5,6 @@
  * @file client.c
  */
 #include "Client/client.h"
-#include "Utilities/openglUtilities.h"
-#include "Utilities/playerInterfaceUtilities.h"
 
 // ---- Global variables ----
 
@@ -59,8 +57,28 @@ static int32_t assignedFactionId = -1;
 // Will be NULL if no faction is assigned or if the level is not initialized.
 static const Faction *localFaction = NULL;
 
+// -- Player interaction state variables --
+
 // Tracks the player's current planet selection state.
 static PlayerSelectionState selectionState = {0};
+
+// Tracks the player's control groups, which are
+// collections of selected planets assigned to number keys.
+// When the assigned number key is pressed, the selection
+// changes to the planets in that control group.
+static PlayerControlGroups controlGroups = {0};
+
+// Indicates whether box selection mode is active.
+static bool boxSelectActive = false;
+
+// Indicates whether the player is currently dragging a box selection.
+static bool boxSelectDragging = false;
+
+// Starting position of the box selection drag. Will be filled in on a left mouse button down.
+static Vec2 boxSelectStart = {0.0f, 0.0f};
+
+// Current position of the box selection drag. Updated as the mouse moves.
+static Vec2 boxSelectCurrent = {0.0f, 0.0f};
 
 // -- Timing variables --
 
@@ -86,6 +104,10 @@ static void ProcessNetworkMessages(void);
 static void SendJoinRequest(void);
 static bool PromptForServerAddress(void);
 static void RenderFrame(float fps);
+static void DrawSelectionBox(void);
+static void ApplyBoxSelection(bool additive);
+static void HandleClickSelection(Vec2 mousePos, bool additive);
+static int ControlGroupIndexFromKey(WPARAM key);
 
 /**
  * Helper function to draw selection highlights
@@ -115,6 +137,166 @@ static void DrawSelectionHighlights(void) {
         DrawFeatheredRing(level.planets[i].position.x, level.planets[i].position.y,
             radius + 2.0f, radius + 5.0f, 1.2f, highlightColor);
     }
+}
+
+/**
+ * Helper function to convert a key press into a control group index.
+ * Supports both number row keys and numpad keys.
+ * @param key The WPARAM key code from a keyboard event.
+ * @return The control group index (0-9) or -1 if the key is not a valid control group key.
+ */
+static int ControlGroupIndexFromKey(WPARAM key) {
+
+    // A WPARAM, or "word parameter", is a 32-bit or 64-bit value
+    // used in Windows programming to pass message parameters.
+    // In keyboard events, it represents the virtual key code of the pressed key.
+    // It just so happens that the virtual key codes for '0'-'9' and
+    // VK_NUMPAD0-VK_NUMPAD9 are contiguous ranges,
+    // and that '0' and VK_NUMPAD0 both represent the digit 0,
+    // which we map to control group index 9, while '1'-'9' map to indices 0-8.
+    // This is done to align with QWERTY keyboard layouts where '1' is the first number key
+    // along the top row, and '0' is the tenth key.
+
+    // Check for number row keys '0'-'9'.
+    if (key >= '0' && key <= '9') {
+        int value = (int)(key - '0');
+        return value == 0 ? 9 : value - 1;
+    }
+
+    // Check for numpad keys VK_NUMPAD0-VK_NUMPAD9.
+    if (key >= VK_NUMPAD0 && key <= VK_NUMPAD9) {
+        int value = (int)(key - VK_NUMPAD0);
+        return value == 0 ? 9 : value - 1;
+    }
+
+    // Not a valid control group key.
+    return -1;
+}
+
+/**
+ * Helper function to draw the box selection rectangle
+ * during a box selection drag operation.
+ */
+static void DrawSelectionBox(void) {
+    // If box selection is not active or not dragging, do nothing.
+    if (!boxSelectActive || !boxSelectDragging) {
+        return;
+    }
+
+    // Determine the corners of the selection box.
+    float minX = fminf(boxSelectStart.x, boxSelectCurrent.x);
+    float maxX = fmaxf(boxSelectStart.x, boxSelectCurrent.x);
+    float minY = fminf(boxSelectStart.y, boxSelectCurrent.y);
+    float maxY = fmaxf(boxSelectStart.y, boxSelectCurrent.y);
+
+    // Outline color: same as the assigned faction color but more opaque.
+    // Otherwise defaults to a blueish color.
+    float outlineColor[4] = {0.0f, 0.8f, 1.0f, 0.7f};
+    if (localFaction != NULL) {
+        outlineColor[0] = localFaction->color[0];
+        outlineColor[1] = localFaction->color[1];
+        outlineColor[2] = localFaction->color[2];
+    }
+
+    // Fill color: same as the assigned faction color but semi-transparent.
+    // Otherwise defaults to a blueish color.
+    float fillColor[4] = {0.0f, 0.6f, 1.0f, 0.18f};
+    if (localFaction != NULL) {
+        fillColor[0] = localFaction->color[0];
+        fillColor[1] = localFaction->color[1];
+        fillColor[2] = localFaction->color[2];
+    }
+    
+    DrawOutlinedRectangle(minX, minY, maxX, maxY, outlineColor, fillColor);
+}
+
+/**
+ * Helper function to apply the box selection
+ * to the player's selection state.
+ * @param additive When true, the selected planets are added to the existing selection.
+ */
+static void ApplyBoxSelection(bool additive) {
+    // If the level is not initialized or there is no local faction, do nothing.
+    if (!levelInitialized || localFaction == NULL) {
+        return;
+    }
+
+    // If there is no selection state, do nothing.
+    if (selectionState.selectedPlanets == NULL || selectionState.capacity == 0) {
+        return;
+    }
+
+    // If not additive, clear the existing selection first.
+    if (!additive) {
+        PlayerSelectionClear(&selectionState);
+    }
+
+    // Determine the bounds of the selection box.
+    float minX = fminf(boxSelectStart.x, boxSelectCurrent.x);
+    float maxX = fmaxf(boxSelectStart.x, boxSelectCurrent.x);
+    float minY = fminf(boxSelectStart.y, boxSelectCurrent.y);
+    float maxY = fmaxf(boxSelectStart.y, boxSelectCurrent.y);
+
+    // Iterate through all planets and select those within the box
+    // that are owned by the local faction.
+    size_t limit = level.planetCount < selectionState.capacity ? level.planetCount : selectionState.capacity;
+    for (size_t i = 0; i < limit; ++i) {
+        const Planet *planet = &level.planets[i];
+        if (planet->owner != localFaction) {
+            continue;
+        }
+
+        // A planet's center position must be within the box to be selected.
+
+        // Check if the planet's position is within the selection box.
+        float px = planet->position.x;
+        float py = planet->position.y;
+        if (px < minX || px > maxX || py < minY || py > maxY) {
+            continue;
+        }
+
+        // Set the planet as selected in this client's selection state.
+        PlayerSelectionSet(&selectionState, i, true);
+    }
+}
+
+/**
+ * Helper function to handle a click selection
+ * at the given mouse position.
+ * @param mousePos The position of the mouse click.
+ * @param additive When true, the clicked planet is added to the existing selection.
+ */
+static void HandleClickSelection(Vec2 mousePos, bool additive) {
+    // If the level is not initialized or there is no local faction, 
+    // there is no valid selection to be made.
+    if (!levelInitialized || localFaction == NULL) {
+        PlayerSelectionClear(&selectionState);
+        return;
+    }
+
+    // Find the planet at the clicked position.
+    size_t planetIndex = 0;
+    Planet *clicked = PickPlanetAt(mousePos, &planetIndex);
+
+    // If no planet was clicked, clear selection if not additive.
+    if (clicked == NULL) {
+        if (!additive) {
+            PlayerSelectionClear(&selectionState);
+        }
+        return;
+    }
+
+    // If the clicked planet is not owned by the local faction,
+    // clear selection if not additive.
+    if (clicked->owner != localFaction) {
+        if (!additive) {
+            PlayerSelectionClear(&selectionState);
+        }
+        return;
+    }
+
+    // Toggle the selection state of the clicked planet.
+    PlayerSelectionToggle(&selectionState, planetIndex, additive);
 }
 
 /**
@@ -211,7 +393,19 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
 
     // Reset the player's selection state in case they
     // had any selections prior to the full packet.
-    PlayerSelectionReset(&selectionState, level.planetCount);
+    if (!PlayerSelectionReset(&selectionState, level.planetCount)) {
+        printf("Failed to reset selection state.\n");
+    }
+
+    // Also reset control groups to clear any prior groups that may 
+    // be out of sync with the new level state.
+    if (!PlayerControlGroupsReset(&controlGroups, level.planetCount)) {
+        printf("Failed to reset control groups.\n");
+    }
+
+    // Reset box selection state.
+    boxSelectActive = false;
+    boxSelectDragging = false;
     RefreshLocalFaction();
 }
 
@@ -528,6 +722,9 @@ static void RenderFrame(float fps) {
         }
     }
 
+    // In case we are doing box selection, draw the selection box.
+    DrawSelectionBox();
+
     // Draw the FPS, faction ID, and selection count in the top-left corner.
     if (openglContext.fontDisplayListBase && openglContext.width >= 10 && openglContext.height >= 10) {
         // Line 1, topmost: FPS
@@ -640,41 +837,86 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // Get the mouse position from lParam.
             int x = LOWORD(lParam);
             int y = HIWORD(lParam);
+
+            // Capture the starting position for box selection.
+            boxSelectStart.x = (float)x;
+            boxSelectStart.y = (float)y;
+
+            // Initialize box selection state.
+            boxSelectCurrent = boxSelectStart;
+            boxSelectActive = true;
+            boxSelectDragging = false;
+
+            // Capture the mouse input to this window
+            // so we continue to receive mouse move and button up events
+            // even if the cursor leaves the window area.
+            SetCapture(window_handle);
+            return 0;
+        }
+
+        // This message indicates the mouse has moved.
+        // wParam contains flags indicating which buttons are pressed.
+        // lParam contains the x and y coordinates of the mouse cursor.
+        case WM_MOUSEMOVE: {
+            if (!boxSelectActive || (wParam & MK_LBUTTON) == 0) {
+                return 0;
+            }
+
+            // Get the current mouse position from lParam.
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            boxSelectCurrent.x = (float)x;
+            boxSelectCurrent.y = (float)y;
+
+            // If the mouse has not yet moved enough to be considered dragging,
+            // check if it has now exceeded the drag threshold.
+            if (!boxSelectDragging) {
+                float dx = boxSelectCurrent.x - boxSelectStart.x;
+                float dy = boxSelectCurrent.y - boxSelectStart.y;
+                if (fabsf(dx) >= BOX_SELECT_DRAG_THRESHOLD || fabsf(dy) >= BOX_SELECT_DRAG_THRESHOLD) {
+                    // If so, mark as dragging so we can start drawing the selection box
+                    // and apply box selection on mouse up.
+                    boxSelectDragging = true;
+                }
+            }
+            return 0;
+        }
+
+        // This message indicates a mouse button was released.
+        // lParam contains the x and y coordinates of the mouse cursor.
+        case WM_LBUTTONUP: {
+            // If box selection is active, release mouse capture
+            // so we stop receiving mouse events.
+            if (boxSelectActive) {
+                ReleaseCapture();
+            }
+
+            // Get the mouse position from lParam.
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
             Vec2 mousePos = {(float)x, (float)y};
+            boxSelectCurrent = mousePos;
 
-            // Get the planet at the mouse position, if any.
-            size_t planetIndex = 0;
-            Planet *clicked = PickPlanetAt(mousePos, &planetIndex);
-            if (clicked == NULL) {
-                // If the player is holding down shift, they're trying to add to their selection,
-                // so we don't clear the selection when clicking empty space.
-                if ((GetKeyState(VK_SHIFT) & 0x8000) == 0) {
-                    PlayerSelectionClear(&selectionState);
-                }
-                return 0;
-            }
-
-            // If the clicked planet is not owned by the local faction, clear selection unless Shift is held.
-            if (clicked->owner != localFaction) {
-                // If the clicked planet is not owned by the local faction,
-                // and the Shift key is not pressed, clear the current selection.
-                // We AND the result of GetKeyState with 0x8000 to check if the high-order bit is set,
-                // which indicates that the key is currently down.
-                // Somewhat unrelated, but GetKeyState will return a short. Two bits in the short have a meaning:
-                // - The high-order bit (0x8000) indicates whether the key is currently down.
-                // - The low-order bit (0x0001) indicates whether the key is toggled (for toggle keys like Caps Lock).
-                // - The windows help page documenatation is unclear about what any of the other bits mean.
-                if ((GetKeyState(VK_SHIFT) & 0x8000) == 0) {
-                    PlayerSelectionClear(&selectionState);
-                }
-                return 0;
-            }
-
-            // If we reach here, the clicked planet is owned by the local faction.
-            // Holding down shift means the player wants to add/remove from their current selection,
-            // as opposed to replacing it entirely (which is the default behavior).
+            // If the clicked (boxed) planet (planets) is (are) not owned by the local faction,
+            // and the Shift key is not pressed, clear the current selection.
+            // We AND the result of GetKeyState with 0x8000 to check if the high-order bit is set,
+            // which indicates that the key is currently down.
+            // Somewhat unrelated, but GetKeyState will return a short. Two bits in the short have a meaning:
+            // - The high-order bit (0x8000) indicates whether the key is currently down.
+            // - The low-order bit (0x0001) indicates whether the key is toggled (for toggle keys like Caps Lock).
+            // - The windows help page documenatation is unclear about what any of the other bits mean.
             bool additive = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            PlayerSelectionToggle(&selectionState, planetIndex, additive);
+            if (boxSelectActive && boxSelectDragging) {
+                // If we were dragging, apply box selection.
+                ApplyBoxSelection(additive);
+            } else {
+                // Otherwise, we treat it as a click selection.
+                HandleClickSelection(mousePos, additive);
+            }
+
+            // Regardless of what happened, end box selection state.
+            boxSelectActive = false;
+            boxSelectDragging = false;
             return 0;
         }
 
@@ -705,6 +947,63 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             const SOCKADDR_IN *targetAddress = serverAddressValid ? &serverAddress : NULL;
             PlayerSendMoveOrder(&selectionState, clientSocket, targetAddress, &level, planetIndex);
             return 0;
+        }
+
+        // WM_KEYDOWN is sent when a key is pressed.
+        // wParam contains the virtual-key code of the key that was pressed.
+        // lParam contains additional information about the key event.
+        case WM_KEYDOWN: {
+
+            // Handle control group and selection shortcuts.
+            bool handled = false;
+
+            // Check if Control or Shift keys are held down
+            // (used for control group management).
+            bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+            // Check for F2 key to select all owned planets.
+            if (wParam == VK_F2 && localFaction != NULL) {
+                // Delegate to PlayerSelectionSelectOwned to select all owned planets.
+                PlayerSelectionSelectOwned(&selectionState, &level, localFaction, shiftDown);
+
+                // Mark the event as handled
+                // so we don't pass it to the default window procedure.
+                handled = true;
+            } else if (localFaction != NULL) {
+                // Check for number keys (0-9 and numpad 0-9) for control groups.
+                int groupIndex = ControlGroupIndexFromKey(wParam);
+
+                // If a valid control group key was pressed, handle it (invalid key returns -1).
+                if (groupIndex >= 0) {
+                    if (ctrlDown) {
+                        // ctrl + number = overwrite control group with new selection
+                        PlayerControlGroupsOverwrite(&controlGroups, (size_t)groupIndex, &selectionState);
+                    } else if (shiftDown && selectionState.count > 0) {
+                        // shift + number = add current selection to control group
+                        PlayerControlGroupsAdd(&controlGroups, (size_t)groupIndex, &selectionState);
+                    } else {
+                        // number alone = recall control group selection
+                        PlayerControlGroupsApply(&controlGroups,
+                            (size_t)groupIndex,
+                            &level,
+                            localFaction,
+                            &selectionState,
+                            shiftDown);
+                    }
+                    // Mark the event as handled
+                    // so we don't pass it to the default window procedure.
+                    handled = true;
+                }
+            }
+
+            // If we handled the key event, return 0 to indicate success.
+            if (handled) {
+                return 0;
+            }
+
+            // If the key was not handled, pass it to the default window procedure.
+            return DefWindowProc(window_handle, msg, wParam, lParam);
         }
         default:
             //If the message is not handled by this procedure, 
@@ -878,6 +1177,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     // At this point, we are exiting the main loop and need to clean up resources.
     PlayerSelectionFree(&selectionState);
+    PlayerControlGroupsFree(&controlGroups);
     LevelRelease(&level);
 
     if (clientSocket != INVALID_SOCKET) {

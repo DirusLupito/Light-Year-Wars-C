@@ -26,6 +26,18 @@ typedef struct PlayerSelectionState {
     size_t count;
 } PlayerSelectionState;
 
+// Define the maximum number of control groups a player can have.
+// Corresponds to the number keys 0-9.
+#define PLAYER_MAX_CONTROL_GROUPS 10
+
+// Structure to hold the player's control groups.
+// Each control group is a dynamic array of booleans indicating selected planets.
+// The capacity indicates how many planets can be tracked by each control group.
+typedef struct PlayerControlGroups {
+    bool *groups[PLAYER_MAX_CONTROL_GROUPS];
+    size_t capacity;
+} PlayerControlGroups;
+
 /**
  * Resets the player's selection state to accommodate a new number of planets.
  * Allocates or reallocates the selection buffer as needed.
@@ -60,6 +72,28 @@ bool PlayerSelectionToggle(PlayerSelectionState *state, size_t index, bool addit
 void PlayerSelectionFree(PlayerSelectionState *state);
 
 /**
+ * Sets the selection state of the specified planet.
+ * @param state Pointer to the PlayerSelectionState to modify.
+ * @param index Index of the planet.
+ * @param selected true to select, false to deselect.
+ * @return true if the operation succeeded, false otherwise.
+ */
+bool PlayerSelectionSet(PlayerSelectionState *state, size_t index, bool selected);
+
+/**
+ * Selects all planets owned by the specified faction.
+ * @param state Pointer to the PlayerSelectionState to update.
+ * @param level Pointer to the current Level structure.
+ * @param owner Pointer to the owning faction.
+ * @param additive When true the owned planets are added to the existing selection.
+ * @return true if at least one owned planet was processed, false otherwise.
+ */
+bool PlayerSelectionSelectOwned(PlayerSelectionState *state,
+    const Level *level,
+    const Faction *owner,
+    bool additive);
+
+/**
  * Sends a move order to the server for the selected planets
  * to move fleets to the specified destination planet.
  * @param state Pointer to the PlayerSelectionState containing selected planets.
@@ -74,5 +108,59 @@ bool PlayerSendMoveOrder(const PlayerSelectionState *state,
     const SOCKADDR_IN *serverAddress,
     const Level *level,
     size_t destinationIndex);
+
+/**
+ * Resizes the control group buffers to accommodate the provided planet count.
+ * Existing data is cleared when the capacity changes.
+ * @param groups Pointer to the PlayerControlGroups to reset.
+ * @param planetCount Number of planets to support.
+ * @return true on success, false otherwise.
+ */
+bool PlayerControlGroupsReset(PlayerControlGroups *groups, size_t planetCount);
+
+/**
+ * Releases memory owned by the control groups structure.
+ * @param groups Pointer to the PlayerControlGroups to free.
+ */
+void PlayerControlGroupsFree(PlayerControlGroups *groups);
+
+/**
+ * Replaces the specified control group with the current selection.
+ * @param groups Pointer to the PlayerControlGroups to modify.
+ * @param groupIndex Index of the control group (0-9).
+ * @param selection Pointer to the current selection state.
+ * @return true if the group was updated, false otherwise.
+ */
+bool PlayerControlGroupsOverwrite(PlayerControlGroups *groups,
+    size_t groupIndex,
+    const PlayerSelectionState *selection);
+
+/**
+ * Adds the planets from the current selection into the specified control group.
+ * @param groups Pointer to the PlayerControlGroups to modify.
+ * @param groupIndex Index of the control group (0-9).
+ * @param selection Pointer to the current selection state.
+ * @return true if the group was updated, false otherwise.
+ */
+bool PlayerControlGroupsAdd(PlayerControlGroups *groups,
+    size_t groupIndex,
+    const PlayerSelectionState *selection);
+
+/**
+ * Applies the specified control group to the current selection, filtering by ownership.
+ * @param groups Pointer to the PlayerControlGroups to read from.
+ * @param groupIndex Index of the control group (0-9).
+ * @param level Pointer to the current Level structure.
+ * @param owner Pointer to the owning faction.
+ * @param selection Pointer to the selection state to update.
+ * @param additive When true the group's planets are added to the existing selection.
+ * @return true if at least one planet was selected, false otherwise.
+ */
+bool PlayerControlGroupsApply(const PlayerControlGroups *groups,
+    size_t groupIndex,
+    const Level *level,
+    const Faction *owner,
+    PlayerSelectionState *selection,
+    bool additive);
 
 #endif /* _PLAYER_INTERFACE_UTILITIES_H_ */

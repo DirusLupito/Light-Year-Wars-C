@@ -367,3 +367,49 @@ void DrawBackgroundGradient(int width, int height) {
     // Disable blending after drawing the gradient.
     glDisable(GL_BLEND);
 }
+
+/**
+ * Helper function to draw an outlined rectangle using
+ * the given outline and fill colors at the specified coordinates.
+ * Helpful for drawing the selection box during box selection.
+ * @param x1 The x-coordinate of one corner of the box.
+ * @param y1 The y-coordinate of one corner of the box.
+ * @param x2 The x-coordinate of the opposite corner of the box.
+ * @param y2 The y-coordinate of the opposite corner of the box.
+ * @param outlineColor The RGBA color of the box outline.
+ * @param fillColor The RGBA color of the box fill.
+ */
+void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
+    const float outlineColor[4], const float fillColor[4]) {
+
+        // glPushAttrib tells OpenGL to save the current state of certain attributes,
+        // in this case, the enable state and color buffer state.
+        // This is done in order to modify these states for our drawing operations
+        // without permanently changing the global OpenGL state.
+        // Think of it like how when you write assembly code, you push registers onto the stack
+        // before modifying them, and then pop them back to restore their original values.
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        // Draw the filled rectangle first
+        glColor4fv(fillColor);
+        glBegin(GL_QUADS);
+        glVertex2f(x1, y1);
+        glVertex2f(x2, y1);
+        glVertex2f(x2, y2);
+        glVertex2f(x1, y2);
+        glEnd();
+
+        // Draw the outline of the rectangle
+        glColor4fv(outlineColor);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(x1, y1);
+        glVertex2f(x2, y1);
+        glVertex2f(x2, y2);
+        glVertex2f(x1, y2);
+        glEnd();
+
+        // glPopAttrib restores the previously saved OpenGL state.
+        glPopAttrib();
+    }
