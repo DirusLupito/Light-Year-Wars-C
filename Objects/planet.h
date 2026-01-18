@@ -28,7 +28,7 @@ struct Starship;
 #define PLANET_RADIUS_SCALE 3.5f
 
 // The thickness of the planet's ring that indicates fleet capacity.
-#define PLANET_RING_THICKNESS 2.5f
+#define PLANET_RING_THICKNESS 10.0f
 
 // The rate at which the planet's current fleet size adjusts towards its max fleet capacity.
 // This is measured in starships per second.
@@ -36,7 +36,7 @@ struct Starship;
 // it will lose starships at this rate until it reaches max capacity.
 // Similarly, if it has fewer starships than its max capacity,
 // it will gain starships at this rate until it reaches max capacity.
-#define PLANET_FLEET_ADJUST_RATE 4.0f
+#define PLANET_FLEET_ADJUST_RATE 2.0f
 
 // A planet represents an object that can be owned by a faction.
 // It has the capacity to hold a fleet of starships.

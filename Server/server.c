@@ -759,9 +759,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     CameraInitialize(&cameraState);
     cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
     cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
-    float level_width = 1600.0f;
-    float level_height = 1200.0f;
-    GenerateRandomLevel(&level, 24, 4, 5.0f, 30.0f, level_width, level_height, 233);
+    float level_width = 2400.0f;
+    float level_height = 2400.0f;
+    GenerateRandomLevel(&level, 12, 4, 20.0f, 70.0f, level_width, level_height, 3333);
 
     // Once the level is generated, we can set the camera bounds.
     RefreshCameraBounds();
