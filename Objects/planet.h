@@ -30,13 +30,20 @@ struct Starship;
 // The thickness of the planet's ring that indicates fleet capacity.
 #define PLANET_RING_THICKNESS 10.0f
 
-// The rate at which the planet's current fleet size adjusts towards its max fleet capacity.
+// The rate at which the planet's current fleet size increases towards its max fleet capacity.
 // This is measured in starships per second.
-// Should a planet have more starships than its max capacity,
-// it will lose starships at this rate until it reaches max capacity.
-// Similarly, if it has fewer starships than its max capacity,
+// Should a planet have fewer starships than its max capacity,
 // it will gain starships at this rate until it reaches max capacity.
-#define PLANET_FLEET_ADJUST_RATE 2.0f
+#define PLANET_FLEET_BUILD_RATE 2.0f
+
+// The multiplier used when decreasing fleet size when over capacity.
+// This is applied to the difference between currentFleetSize and maxFleetCapacity.
+// Every second, the portion of the fleet size above max capacity
+// is multiplied by this value to determine how much to reduce it by.
+// Set this to a value within the range (0.0f, 1.0f) for proper exponential decay behavior.
+// A value of 1.0f would mean no reduction at all,
+// while a value of 0.0f would mean instant reduction to max capacity.
+#define PLANET_FLEET_REDUCTION_MULTIPLIER 0.5f
 
 // A planet represents an object that can be owned by a faction.
 // It has the capacity to hold a fleet of starships.

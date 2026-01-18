@@ -106,13 +106,31 @@ void PlanetUpdate(Planet *planet, float deltaTime) {
     float target = planet->maxFleetCapacity;
     if (planet->currentFleetSize > target) {
         // Reduce fleet size towards target.
-        planet->currentFleetSize -= PLANET_FLEET_ADJUST_RATE * deltaTime;
+        // This is harsher than the increase rate for two reasons:
+        // 1. Gameplay reason: We don't want mega death fleets to be able
+        // to exist for long periods of time, at least not ones that can originate
+        // from a single planet. This encourages players to spread out
+        // their fleet production across multiple planets rather than
+        // relying on a single overpowered planet which is only slowly
+        // draining its excess ships.
+        // 2. Visual reason: When a planet is over capacity, it gets bigger.
+        // On certain maps this can cause a planet to visually overlap or
+        // even completely cover nearby planets, which looks bad and can
+        // make it hard to see what's going on or select those covered planets.
+
+        // We decrease at an exponential (in terms of the difference between
+        // current and target) rate to ensure that even massively overcapacity
+        // planets return to normal size in a reasonable timeframe.
+        
+        float excess = planet->currentFleetSize - target;
+        float reduction = excess * PLANET_FLEET_REDUCTION_MULTIPLIER * deltaTime;
+        planet->currentFleetSize -= reduction;
         if (planet->currentFleetSize < target) {
             planet->currentFleetSize = target;
         }
     } else if (planet->currentFleetSize < target) {
         // Increase fleet size towards target.
-        planet->currentFleetSize += PLANET_FLEET_ADJUST_RATE * deltaTime;
+        planet->currentFleetSize += PLANET_FLEET_BUILD_RATE * deltaTime;
         if (planet->currentFleetSize > target) {
             planet->currentFleetSize = target;
         }
