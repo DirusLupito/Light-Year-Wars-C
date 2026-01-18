@@ -340,7 +340,7 @@ void PlanetDraw(const Planet *planet) {
     float innerRadius = PlanetGetInnerRadius(planet);
 
     // Determine if the planet is over capacity for drawing purposes
-    bool overCapacity = outerRadius + PLANET_RING_THICKNESS <= innerRadius;
+    bool overCapacity = outerRadius <= innerRadius;
 
     // Draw the ring.
     float ringColor[4];
