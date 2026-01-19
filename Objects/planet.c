@@ -18,6 +18,7 @@
 
 #include "Objects/level.h"
 #include "Objects/starship.h"
+#include "Utilities/gameUtilities.h"
 
 // Used for drawing unowned planets.
 static const float NEUTRAL_COLOR[4] = {0.6f, 0.6f, 0.6f, 1.0f};
@@ -415,6 +416,9 @@ void PlanetDraw(const Planet *planet) {
  * @param destination A pointer to the destination Planet object.
  * @param shipCount The number of starships to spawn.
  */
+/** 
+ * Deprecated in favor of SpawnShipRandom.
+ * 
 static void SpawnShipCircle(Level *level, Planet *origin, Planet *destination, int shipCount) {
     if (shipCount <= 0) {
         return;
@@ -440,6 +444,43 @@ static void SpawnShipCircle(Level *level, Planet *origin, Planet *destination, i
         }
     }
 }
+*/
+
+/**
+ * Spawns starships in a random formation starting from the center of the origin planet,
+ * heading towards the destination planet.
+ * Uses a set RNG state to randomize ship spawn positions.
+ * Multiplayer determinism will require the seed to be shared among clients.
+ * @param level A pointer to the Level object where starships will be spawned.
+ * @param origin A pointer to the origin Planet object.
+ * @param destination A pointer to the destination Planet object.
+ * @param shipCount The number of starships to spawn.
+ * @param shipSpawnRNGState Pointer to the RNG state used to randomize ship spawn positions.
+ */
+static void SpawnShipRandom(Level *level, Planet *origin, Planet *destination,
+    int shipCount, unsigned int *shipSpawnRNGState) {
+    if (shipCount <= 0) {
+        return;
+    }
+    
+    float spawnRadius = STARSHIP_RADIUS * 1.5f;
+
+    for (int i = 0; i < shipCount; ++i) {
+        // Random angle around the planet.
+        float angle = RandomRange(shipSpawnRNGState, 0.0f, 2.0f * (float)M_PI);
+        Vec2 direction = {cosf(angle), sinf(angle)};
+        
+        // Random offset from the spawn radius to avoid perfect circle formation.
+        float offset = RandomRange(shipSpawnRNGState, -STARSHIP_RADIUS, STARSHIP_RADIUS);
+        Vec2 position = Vec2Add(origin->position, Vec2Scale(direction, spawnRadius + offset));
+        Vec2 velocity = Vec2Scale(direction, STARSHIP_INITIAL_SPEED);
+
+        // Spawn the starship at the given randomized position, heading towards the destination planet.
+        if (LevelSpawnStarship(level, position, velocity, origin->owner, destination) == NULL) {
+            break;
+        }
+    }
+}
 
 /**
  * Sends a fleet from the origin planet to the destination planet.
@@ -451,9 +492,10 @@ static void SpawnShipCircle(Level *level, Planet *origin, Planet *destination, i
  * @param origin A pointer to the origin Planet object.
  * @param destination A pointer to the destination Planet object.
  * @param level A pointer to the Level object where starships will be spawned.
+ * @param shipSpawnRNGState Pointer to the RNG state used to randomize ship spawn positions.
  * @return true if the fleet was successfully sent, false otherwise.
  */
-bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
+bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level, unsigned int *shipSpawnRNGState) {
     // Basic validation of parameters.
     if (origin == NULL || destination == NULL || level == NULL) {
         return false;
@@ -482,7 +524,7 @@ bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
     origin->currentFleetSize = 0.0f;
 
     // Actually spawn the starship objects into the level.
-    SpawnShipCircle(level, origin, destination, shipCount);
+    SpawnShipRandom(level, origin, destination, shipCount, shipSpawnRNGState);
     return true;
 }
 
@@ -490,20 +532,18 @@ bool PlanetSendFleet(Planet *origin, Planet *destination, Level *level) {
  * Simulates sending a fleet from the origin planet to the destination planet.
  * This function is similar to PlanetSendFleet but allows specifying the number of starships
  * to send and an optional owner override for the spawned starships.
- * This is useful for simulating fleet launches without altering the origin planet's state,
- * as the server and clients no longer need to tell each other about all the starships being sent,
- * and can instead just agree on the fleet launch event, then due to the deterministic nature of the starship spawning,
- * they can each simulate the same starship spawns independently.
+ * This is useful for simulating fleet launches without altering the origin planet's state.
  * @param origin A pointer to the origin Planet object.
  * @param destination A pointer to the destination Planet object.
  * @param level A pointer to the Level object where starships will be spawned.
  * @param shipCount The number of starships to send.
  * @param ownerOverride An optional pointer to the Faction that will own the spawned starships.
  *                      If NULL, the origin planet's owner will be used.
+ * @param shipSpawnRNGState Pointer to the RNG state used to randomize ship spawn positions.
  * @return true if the fleet was successfully simulated, false otherwise.
  */
 bool PlanetSimulateFleetLaunch(Planet *origin, Planet *destination, Level *level,
-    int shipCount, const Faction *ownerOverride) {
+    int shipCount, const Faction *ownerOverride, unsigned int *shipSpawnRNGState) {
     // Basic validation of parameters.
     if (origin == NULL || destination == NULL || level == NULL) {
         return false;
@@ -531,7 +571,7 @@ bool PlanetSimulateFleetLaunch(Planet *origin, Planet *destination, Level *level
     // Analogous to PlanetSendFleet, we reduce the origin planet's fleet size to 0.0f
     // since we are sending all available ships.
     origin->currentFleetSize = 0.0f;
-    SpawnShipCircle(level, origin, destination, shipCount);
+    SpawnShipRandom(level, origin, destination, shipCount, shipSpawnRNGState);
     return true;
 }
 

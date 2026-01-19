@@ -108,12 +108,15 @@ typedef struct LevelSnapshotPacket {
 // A LevelFleetLaunchPacket communicates a fleet launch initiated on the server.
 // It includes the origin and destination planet indices along with the number of
 // ships that should be spawned by clients to mirror the authoritative action.
+// It also includes a random number generator state to ensure clients
+// can replicate the same randomization used by the server for ship spawn positions.
 typedef struct LevelFleetLaunchPacket {
     uint32_t type;
     int32_t originPlanetIndex;
     int32_t destinationPlanetIndex;
     int32_t shipCount;
     int32_t ownerFactionId;
+    unsigned int shipSpawnRNGState;
 } LevelFleetLaunchPacket;
 
 // A LevelAssignmentPacket communicates the faction assigned to a player.

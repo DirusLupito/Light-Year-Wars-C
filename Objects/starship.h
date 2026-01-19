@@ -25,21 +25,27 @@ struct Planet;
 #define STARSHIP_RADIUS 1.0f
 
 // Maximum speed of a starship in pixels per second.
-#define STARSHIP_MAX_SPEED 75.0f
+// Note that newly spawned starships may exceed this speed temporarily,
+// as their initial velocity is not clamped.
+#define STARSHIP_MAX_SPEED 125.0f
 
 // Acceleration of a starship in pixels per second squared.
-#define STARSHIP_ACCELERATION 90.0f
+#define STARSHIP_ACCELERATION 100.0f
+
+// Exponential parameter which controls the rate at which starships lose excess speed.
+// Keep this within the range (0.0f, 1.0f] for stable behavior.
+#define STARSHIP_SPEED_DECAY_FACTOR 0.9f
 
 // Initial speed of a starship when created in pixels per second.
 // Used when a planet launches its fleet of starships.
-#define STARSHIP_INITIAL_SPEED 45.0f
+#define STARSHIP_INITIAL_SPEED 200.0f
 
 // How long the starship trail lasts in seconds.
 // This will control the age at which trail samples are removed.
-#define STARSHIP_TRAIL_LENGTH_SECONDS 1.0f
+#define STARSHIP_TRAIL_LENGTH_SECONDS 2.0f
 
 // Maximum number of samples in the starship trail.
-#define STARSHIP_TRAIL_MAX_SAMPLES 24
+#define STARSHIP_TRAIL_MAX_SAMPLES 100
 
 // Minimum distance the starship must travel before emitting a new trail sample.
 #define STARSHIP_TRAIL_MIN_DISTANCE 2.5f
@@ -125,7 +131,7 @@ void StarshipTrailEffectDraw(const StarshipTrailEffect *effect);
 
 /**
  * Creates a new starship with the specified position, velocity, owner, and target.
- * The starship's velocity is clamped to STARSHIP_MAX_SPEED.
+ * The starship's initial velocity is preserved, even if it exceeds STARSHIP_MAX_SPEED.
  * @param position The initial position of the starship.
  * @param velocity The initial velocity of the starship.
  * @param owner A pointer to the Faction that owns the starship.

@@ -60,4 +60,7 @@
 // How much the zoom changes each time a scroll of the mouse wheel is detected.
 #define SERVER_CAMERA_ZOOM_FACTOR 1.1f
 
+// Default seed used for ship spawn position RNG if none is provided.
+#define SHIP_SPAWN_SEED 0x12345678u
+
 #endif // _SERVER_H_

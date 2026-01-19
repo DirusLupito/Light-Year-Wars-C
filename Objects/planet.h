@@ -103,9 +103,10 @@ void PlanetDraw(const Planet *planet);
  * @param origin A pointer to the origin Planet object.
  * @param destination A pointer to the destination Planet object.
  * @param level A pointer to the Level object where starships will be spawned.
+ * @param shipSpawnRNGState Pointer to the RNG state used to randomize ship spawn positions.
  * @return true if the fleet was successfully sent, false otherwise.
  */
-bool PlanetSendFleet(Planet *origin, Planet *destination, struct Level *level);
+bool PlanetSendFleet(Planet *origin, Planet *destination, struct Level *level, unsigned int *shipSpawnRNGState);
 
 /**
  * Simulates sending a fleet from the origin planet to the destination planet.
@@ -118,10 +119,11 @@ bool PlanetSendFleet(Planet *origin, Planet *destination, struct Level *level);
  * @param shipCount The number of starships to send.
  * @param ownerOverride An optional pointer to the Faction that will own the spawned starships.
  *                      If NULL, the origin planet's owner will be used.
+ * @param shipSpawnRNGState Pointer to the RNG state used to randomize ship spawn positions.
  * @return true if the fleet was successfully simulated, false otherwise.
  */
 bool PlanetSimulateFleetLaunch(Planet *origin, Planet *destination, struct Level *level,
-    int shipCount, const Faction *ownerOverride);
+    int shipCount, const Faction *ownerOverride, unsigned int *shipSpawnRNGState);
 
 /**
  * Handles an incoming starship to the planet.

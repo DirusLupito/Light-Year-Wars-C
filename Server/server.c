@@ -31,6 +31,9 @@ static SOCKET server_socket = INVALID_SOCKET;
 // Camera state used for navigating the server's spectator view.
 static CameraState cameraState = {0};
 
+// RNG State used to calculate ship spawn positions.
+static unsigned int shipSpawnRNGState = SHIP_SPAWN_SEED;
+
 // Forward declarations of static functions
 static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
@@ -498,7 +501,24 @@ static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination) {
 
     // Determine the owner faction for the launched fleet.
     const Faction *owner = origin->owner;
-    if (!PlanetSendFleet(origin, destination, &level)) {
+
+    
+    // Get a random seed to use for the fleet launch.
+    // shipSpawnRNGState will have its value updated inside PlanetSendFleet.
+    // Will be sent to all clients so they can simulate the same starship spawns.
+    // This ensures that all clients simulate the same starship positions and movements.
+    NextRandom(&shipSpawnRNGState);
+
+    // Keeps track of the previous state of the ship spawn RNG
+    // so that it can be sent to clients to allow them to simulate
+    // the same starship spawn positions.
+    // PlanetSendFleet will update shipSpawnRNGState as it generates random positions,
+    // hence we need to save the old value here.
+    unsigned int oldShipSpawnRNGState = shipSpawnRNGState;
+
+    // Server side fleet launch.
+    // Will mutate server state to appropriately represent the launched fleet.
+    if (!PlanetSendFleet(origin, destination, &level, &shipSpawnRNGState)) {
         return false;
     }
 
@@ -516,7 +536,7 @@ static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination) {
         int32_t ownerId = owner != NULL ? (int32_t)owner->id : -1;
         BroadcastFleetLaunch(server_socket, players, playerCount,
             (int32_t)originIndex, (int32_t)destinationIndex,
-            (int32_t)shipCount, ownerId);
+            (int32_t)shipCount, ownerId, oldShipSpawnRNGState);
     }
 
     return true;

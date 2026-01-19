@@ -164,9 +164,9 @@ void StarshipTrailEffectDraw(const StarshipTrailEffect *effect) {
 
 /**
  * Creates a new starship with the specified position, velocity, owner, and target.
- * The starship's velocity is clamped to STARSHIP_MAX_SPEED.
  * @param position The initial position of the starship.
- * @param velocity The initial velocity of the starship.
+ * @param velocity The initial velocity of the starship. This value is not clamped,
+ *                 allowing newly spawned ships to exceed STARSHIP_MAX_SPEED temporarily.
  * @param owner A pointer to the Faction that owns the starship.
  * @param target A pointer to the Planet that is the target of the starship.
  * @return The created Starship object.
@@ -176,11 +176,10 @@ Starship CreateStarship(Vec2 position, Vec2 velocity, const Faction *owner, Plan
     Starship ship;
 
     // Then we set its members based on the provided parameters.
-    // We clamp the velocity to ensure it does not exceed STARSHIP_MAX_SPEED.
     // Much like Planet, a starship is such a simple object
     // that it does not require any dynamic memory allocation.
     ship.position = position;
-    ship.velocity = Vec2ClampToLength(velocity, STARSHIP_MAX_SPEED);
+    ship.velocity = velocity;
     ship.owner = owner;
     ship.target = target;
     ship.trailCount = 0;
@@ -215,19 +214,33 @@ void StarshipUpdate(Starship *ship, float deltaTime) {
         // We then scale this direction by the acceleration constant and deltaTime
         // to get the change in velocity.
         // Finally, we add this change in velocity to the starship's current velocity.
-        // We also clamp the resulting velocity to STARSHIP_MAX_SPEED.
 
         // So very basically:
         // toTarget = target.position - ship.position
         // direction = Normalize(toTarget)
         // acceleration = direction * (STARSHIP_ACCELERATION * deltaTime)
         // ship.velocity += acceleration
-        // ship.velocity = ClampToLength(ship.velocity, STARSHIP_MAX_SPEED)
+        // Once the update step finishes, a separate speed limit check
+        // will gently bring the ship down toward STARSHIP_MAX_SPEED if needed.
         Vec2 toTarget = Vec2Subtract(ship->target->position, ship->position);
         Vec2 direction = Vec2Normalize(toTarget);
         Vec2 acceleration = Vec2Scale(direction, STARSHIP_ACCELERATION * deltaTime);
         ship->velocity = Vec2Add(ship->velocity, acceleration);
-        ship->velocity = Vec2ClampToLength(ship->velocity, STARSHIP_MAX_SPEED);
+
+        // If the ship is travelling faster than the allowed top speed,
+        // bleed off speed gradually while keeping the updated direction.
+        float currentSpeed = Vec2Length(ship->velocity);
+        if (currentSpeed > STARSHIP_MAX_SPEED && currentSpeed > 0.0f) {
+            float targetSpeed = currentSpeed * STARSHIP_SPEED_DECAY_FACTOR;
+            if (targetSpeed < STARSHIP_MAX_SPEED) {
+                targetSpeed = STARSHIP_MAX_SPEED;
+            }
+
+            if (targetSpeed < currentSpeed) {
+                Vec2 velocityDir = Vec2Scale(ship->velocity, 1.0f / currentSpeed);
+                ship->velocity = Vec2Scale(velocityDir, targetSpeed);
+            }
+        }
     }
 
     // Finally, we update the starship's position based on its velocity.

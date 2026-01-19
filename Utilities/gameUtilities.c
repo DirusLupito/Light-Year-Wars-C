@@ -6,6 +6,9 @@
 
 #include "Utilities/gameUtilities.h"
 
+// Included here to avoid circular dependency issues.
+#include "Objects/planet.h"
+
 /**
  * Gets the current tick count using QueryPerformanceCounter.
  * @return The current tick count.
@@ -34,7 +37,8 @@ int64_t GetTickFrequency() {
 
 /**
  * Helper function to generate the next random number
- * using a linear congruential generator (LCG).
+ * using a linear congruential generator (LCG), given
+ * the current state (previous random number).
  * Implements the following recurrence relation:
  * X_{n+1} = (a * X_n + c) mod m
  * where:
@@ -43,9 +47,11 @@ int64_t GetTickFrequency() {
  * m = 2^32
  * Since we are using unsigned int, the modulus operation is implicit due to overflow.
  * The constants a and c were found on the Internet and Wikipedia's page on LCGs
- * says they come from ranqd1 .
+ * says they come from ranqd1.
+ * @param state Pointer to the current state of the random number generator.
+ * @return The next random number in the sequence.
  */
-static unsigned int NextRandom(unsigned int *state) {
+unsigned int NextRandom(unsigned int *state) {
     const unsigned int a = 1664525u;
     const unsigned int c = 1013904223u;
     *state = a * (*state) + c;
@@ -59,7 +65,7 @@ static unsigned int NextRandom(unsigned int *state) {
  * @param maxValue The maximum value of the range (exclusive).
  * @return A random float in the specified range.
  */
-static float RandomRange(unsigned int *state, float minValue, float maxValue) {
+float RandomRange(unsigned int *state, float minValue, float maxValue) {
     unsigned int value = NextRandom(state);
     // Normalize to [0.0, 1.0)
     // By ANDing with 0x00FFFFFFu, we get the lower 24 bits,
@@ -78,7 +84,7 @@ static float RandomRange(unsigned int *state, float minValue, float maxValue) {
  * @param v Value component (0.0 to 1.0).
  * @param out Output array for RGB components (must have at least 3 elements).
  */
-static void HSVtoRGB(float h, float s, float v, float out[3]) {
+void HSVtoRGB(float h, float s, float v, float out[3]) {
     float c = v * s;
     float hh = fmodf(h, 360.0f) / 60.0f;
     float x = c * (1.0f - fabsf(fmodf(hh, 2.0f) - 1.0f));
@@ -254,7 +260,8 @@ bool GenerateRandomLevel(Level *level,
         // For the first factionCount planets, assign each to a different faction.
         // The rest remain unowned.
         // This ensures each faction starts with exactly one planet.
-        planet.currentFleetSize = 0.0f;
+        // We also spawn these planets with full fleet capacity, for a faster start.
+        planet.currentFleetSize = (i < factionCount) ? planet.maxFleetCapacity : 0.0f;
         planet.claimant = NULL;
         planet.owner = (i < factionCount) ? &level->factions[i] : NULL;
         level->planets[i] = planet;

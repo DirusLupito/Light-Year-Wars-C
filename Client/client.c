@@ -717,6 +717,7 @@ static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length) {
     int32_t originIndex = packet->originPlanetIndex;
     int32_t destinationIndex = packet->destinationPlanetIndex;
     int32_t shipCount = packet->shipCount;
+    unsigned int shipSpawnRNGState = packet->shipSpawnRNGState;
 
     // Validate the extracted launch details.
     if (originIndex < 0 || destinationIndex < 0 || shipCount <= 0) {
@@ -738,7 +739,7 @@ static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length) {
     }
 
     // Simulate the fleet launch on the client side.
-    if (!PlanetSimulateFleetLaunch(origin, destination, &level, shipCount, owner)) {
+    if (!PlanetSimulateFleetLaunch(origin, destination, &level, shipCount, owner, &shipSpawnRNGState)) {
         return;
     }
 }

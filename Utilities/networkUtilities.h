@@ -110,9 +110,11 @@ void BroadcastSnapshots(SOCKET sock, const Level *level, Player *players, size_t
  * @param destinationPlanetIndex The index of the destination planet.
  * @param shipCount The number of ships being launched.
  * @param ownerFactionId The faction ID of the fleet owner.
+ * @param shipSpawnRNGState The RNG state used to randomize ship spawn positions.
+ *                          Sent to clients so they can simulate the same starship spawns.
  */
 void BroadcastFleetLaunch(SOCKET sock, Player *players, size_t playerCount,
     int32_t originPlanetIndex, int32_t destinationPlanetIndex,
-    int32_t shipCount, int32_t ownerFactionId);
+    int32_t shipCount, int32_t ownerFactionId, unsigned int shipSpawnRNGState);
 
 #endif // _NETWORK_UTILITIES_H_
