@@ -7,8 +7,8 @@
 #define _RENDER_UTILITIES_H_
 
 #include <stdint.h>
-#include <GL/gl.h>
 #include <math.h>
+#include "openglUtilities.h"
 
 // Type Definitions
 typedef struct {
@@ -143,5 +143,17 @@ void DrawBackgroundGradient(int width, int height);
  */
 void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
     const float outlineColor[4], const float fillColor[4]);
+
+/**
+ * Renders text directly onto the screen at the specified coordinates.
+ * @param context The OpenGL context containing rendering information.
+ * @param text The null-terminated string of text to render.
+ * @param x The x-coordinate on the screen to start rendering the text.
+ * @param y The y-coordinate on the screen to start rendering the text.
+ * @param fontPixelHeight The desired height of the font in pixels.
+ * @param color The RGBA color to use for rendering the text.
+ */
+void DrawScreenText(OpenGLContext *context, const char *text, float x, float y,
+    float fontPixelHeight, const float color[4]);
 
 #endif // _RENDER_UTILITIES_H_

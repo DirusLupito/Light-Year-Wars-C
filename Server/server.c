@@ -949,34 +949,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             }
 
             // Display FPS in the top-left corner
-            if (openglContext.fontDisplayListBase && openglContext.width >= 10 && openglContext.height >= 10) {
-                char fps_string[32];
-                snprintf(fps_string, sizeof(fps_string), "FPS: %.0f", fps);
 
-                // Text color is white
-                glColor3f(1.0f, 1.0f, 1.0f);
+            int textPositionFromTop = 20;
+            int textPositionFromLeft = 10;
 
-                // Text only needs an identity modelview matrix
-                glLoadIdentity();
-                // Text position is 10 pixels from the left and 20 pixels from the top
-                glRasterPos2f(10.0f, 20.0f);
+            if (openglContext.width >= textPositionFromLeft && openglContext.height >= textPositionFromTop) {
+                char fpsString[32];
+                snprintf(fpsString, sizeof(fpsString), "FPS: %.0f", fps);
 
-                // Render the FPS string using the font display lists
-                glPushAttrib(GL_LIST_BIT);
-
-                // Set the base display list for character rendering
-                // This is done by subtracting 32 from the display list base
-                // because our display lists start at ASCII character 32 (space character).
-                glListBase(openglContext.fontDisplayListBase - 32);
-
-                // Call the display lists for each character in the fps_string
-                // This renders the string to the screen.
-                glCallLists((GLsizei)strlen(fps_string), GL_UNSIGNED_BYTE, fps_string);
-
-                // Restore the previous display list state
-                glPopAttrib();
+                float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                float textSize = 16.0f;
+                DrawScreenText(&openglContext, fpsString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textColor);
             }
 
+            // Swap the front and back buffers to display the rendered frame.
+            // There's two buffers, one being displayed while the other is drawn to.
+            // Swapping them makes the newly drawn frame visible, while taking the
+            // previously displayed buffer off-screen for the next frame's drawing.
             SwapBuffers(openglContext.deviceContext);
         }
     }

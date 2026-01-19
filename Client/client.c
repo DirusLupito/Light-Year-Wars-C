@@ -967,54 +967,28 @@ static void RenderFrame(float fps) {
     DrawSelectionBox();
 
     // Draw the FPS, faction ID, and selection count in the top-left corner.
-    if (openglContext.fontDisplayListBase && openglContext.width >= 10 && openglContext.height >= 10) {
-        // Line 1, topmost: FPS
-        char line1[64];
+    
+    int textPositionFromTop = 20;
+    int textPositionFromLeft = 10;
+    if (levelInitialized && openglContext.width >= textPositionFromLeft && openglContext.height >= textPositionFromTop) {
+        char infoString[160];
+        int selectionCount = selectionState.count;
+        int factionId = assignedFactionId >= 0 ? assignedFactionId : -1;
+        snprintf(infoString, sizeof(infoString),
+            "FPS: %.1f\nFaction ID: %d\nNumber of Selected Planets: %d",
+            fps,
+            factionId,
+            selectionCount);
 
-        // Line 2, middle: Faction ID
-        char line2[64];
-
-        // Line 3, bottom: Number of selected planets
-        char line3[64];
-        snprintf(line1, sizeof(line1), "FPS: %.0f", fps);
-        int factionDisplay = localFaction != NULL ? localFaction->id : -1;
-        snprintf(line2, sizeof(line2), "Faction: %d", factionDisplay);
-        snprintf(line3, sizeof(line3), "Selection: %zu", selectionState.count);
-
-        // White color for text
-        glColor3f(1.0f, 1.0f, 1.0f);
-
-        // Identity modelview matrix for 2D text rendering.
-        glLoadIdentity();
-
-        // Set the raster position for the first line of text (FPS)
-        // 10 pixels from the left, 20 pixels from the top
-        glRasterPos2f(10.0f, 20.0f);
-
-        // glPushAttrib and glPopAttrib are used to save and restore
-        // the current OpenGL state related to display lists.
-        glPushAttrib(GL_LIST_BIT);
-
-        // glListBase sets the base value for display lists.
-        glListBase(openglContext.fontDisplayListBase - 32);
-
-        // glCallLists renders the text using the display lists.
-        // It takes the length of the string, the type of data (unsigned byte),
-        // and a pointer to the string data.
-        glCallLists((GLsizei)strlen(line1), GL_UNSIGNED_BYTE, line1);
-
-        // Second line (Faction ID), 10 pixels from the left, 36 pixels from the top
-        // We add 16 pixels to the y-coordinate to move down for the next line
-        // since each line is approximately 16 pixels high (see font size in openglUtilities.c).
-        glRasterPos2f(10.0f, 36.0f);
-        glCallLists((GLsizei)strlen(line2), GL_UNSIGNED_BYTE, line2);
-
-        // Third line (Selection count), 10 pixels from the left, 52 pixels from the top
-        glRasterPos2f(10.0f, 52.0f);
-        glCallLists((GLsizei)strlen(line3), GL_UNSIGNED_BYTE, line3);
-        glPopAttrib();
+        float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        float textSize = 16.0f;
+        DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textColor);
     }
 
+    // Swap the front and back buffers to display the rendered frame.
+    // There's two buffers, one being displayed while the other is drawn to.
+    // Swapping them makes the newly drawn frame visible, while taking the
+    // previously displayed buffer off-screen for the next frame's drawing.
     SwapBuffers(openglContext.deviceContext);
 }
 

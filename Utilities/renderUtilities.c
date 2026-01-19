@@ -425,3 +425,143 @@ void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
         // glPopMatrix restores the previous matrix state.
         glPopMatrix();
     }
+
+/**
+ * Renders text directly onto the screen at the specified coordinates.
+ * @param context The OpenGL context containing rendering information.
+ * @param text The null-terminated string of text to render.
+ * @param x The x-coordinate on the screen to start rendering the text.
+ * @param y The y-coordinate on the screen to start rendering the text.
+ * @param fontPixelHeight The desired height of the font in pixels, or default of 16 if <= 0.
+ * @param color The RGBA color to use for rendering the text, or NULL for default white.
+ */
+void DrawScreenText(OpenGLContext *context, const char *text, float x, float y,
+    float fontPixelHeight, const float color[4]) {
+
+    // Basic validation of input parameters.
+    if (context == NULL || text == NULL) {
+        return;
+    }
+
+    if (context->deviceContext == NULL || context->renderContext == NULL) {
+        return;
+    }
+
+    if (context->width <= 0 || context->height <= 0) {
+        return;
+    }
+
+    // If no valid font height is provided, we use 16 pixels as a default.
+    if (fontPixelHeight <= 0.0f) {
+        fontPixelHeight = 16.0f;
+    }
+
+    // We want to ensure the font height is a positive integer value,
+    // so we take the absolute value and round it to the nearest whole number.
+
+    float absHeight = fabsf(fontPixelHeight);
+    int roundedHeight = (int)(absHeight + 0.5f);
+    if (roundedHeight <= 0) {
+        roundedHeight = 1;
+    }
+
+    // We have a dedicated helper function OpenGLAcquireFont which can create or retrieve
+    // a font display list based on the specified font parameters.
+    GLuint listBase = OpenGLAcquireFont(context, 
+        -1 * roundedHeight, // Height of font. This is negative to indicate character height rather than cell height
+        0, // Width of font. 0 means default width based on height
+        0, // Angle of escapement. Escapement is the angle between the baseline of a character and the x-axis of the device.
+        0, // Orientation angle. This is the angle between the baseline of a character and the x-axis of the device.
+        FW_NORMAL,  // Font weight. FW_NORMAL is normal weight.
+        FALSE,  // Italic attribute option
+        FALSE,  // Underline attribute option
+        FALSE,  // Strikeout attribute option
+        ANSI_CHARSET,  // Character set identifier
+        OUT_TT_PRECIS,  // Output precision. TT means TrueType.
+        CLIP_DEFAULT_PRECIS,  // Clipping precision
+        ANTIALIASED_QUALITY,  // Output quality
+        FF_DONTCARE | DEFAULT_PITCH, // Family and pitch of the font (don't care about family, default pitch)
+        "Segoe UI"); // Typeface name
+        
+    // A listBase of 0 indicates failure to acquire the font.
+    if (listBase == 0) {
+        return;
+    }
+
+    // Determine the final color to use for rendering the text.
+
+    // By default, we use white color if no color is provided.
+    float defaultColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    const float *finalColor = color != NULL ? color : defaultColor;
+
+    // We save the current OpenGL state before modifying it for text rendering.
+    glPushAttrib(GL_CURRENT_BIT | GL_LIST_BIT | GL_ENABLE_BIT);
+
+    // We disable texturing and lighting to ensure the text is rendered correctly
+    // without any unwanted effects (this is UI text, as opposed to some sort of 
+    // text being rendered into some game world scene).
+
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_LIGHTING);
+    
+    // Apply the desired text color.
+    glColor4fv(finalColor);
+
+    // We subtract 32 from the list base because
+    // the first 32 ASCII characters are non-printable control characters,
+    // and as such our font from OpenGLAcquireFont does not include them.
+    glListBase(listBase - 32);
+
+    // Will make any subsequent matrix operations affect the modelview matrix.
+    glMatrixMode(GL_MODELVIEW);
+
+    // Save the current matrix state.
+    glPushMatrix();
+    
+    // Load the identity matrix to reset any previous transformations.
+    glLoadIdentity();
+
+    // Now we render the text line by line, handling newlines appropriately.
+    
+    // The starting y-coordinate for the first line of text.
+    float lineY = y;
+    const char *lineStart = text;
+
+    // Loop through each line in the text until we reach the null terminator.
+    while (*lineStart != '\0') {
+        
+        // We find the end of the current line by searching for a newline character,
+        // and then once we know the line length, we can render that line.
+        const char *lineEnd = strchr(lineStart, '\n');
+        if (lineEnd == NULL) {
+            // If no newline is found, the line goes until the end of the string.
+            lineEnd = lineStart + strlen(lineStart);
+        }
+
+        // Determine the length of the current line.
+        size_t lineLength = (size_t)(lineEnd - lineStart);
+
+        // Render the current line at the specified (x, lineY) position.
+        glRasterPos2f(x, lineY);
+        if (lineLength > 0) {
+            // The glCallLists function executes a list of display lists.
+            // Here, we use it to render each character in the current line.
+            glCallLists((GLsizei)lineLength, GL_UNSIGNED_BYTE, lineStart);
+        }
+
+        // If we reached the end of the string, we are done.
+        if (*lineEnd == '\0') {
+            break;
+        }
+
+        // Move to the start of the next line,
+        // and adjust the y-coordinate for the next line 
+        // based on the font pixel height.
+        lineStart = lineEnd + 1;
+        lineY += fontPixelHeight;
+    }
+
+    // Reset OpenGL state to what it was before rendering the text.
+    glPopMatrix();
+    glPopAttrib();
+}
