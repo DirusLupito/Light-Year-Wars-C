@@ -8,6 +8,17 @@
 
 // ---- Global variables ----
 
+// -- Client state variables --
+
+// Defines the current stage of the client application.
+// Controls what logic and rendering is to be performed.
+static ClientStage currentStage = CLIENT_STAGE_MENU;
+
+// -- Menu UI variables --
+
+// Tracks the state of the main menu UI while waiting to connect.
+static MenuUIState menuUI = {0};
+
 // -- Window and rendering variables --
 
 // Running = true while the main loop should continue
@@ -111,7 +122,7 @@ static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length);
 static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
 static void SendJoinRequest(void);
-static bool PromptForServerAddress(void);
+static void ProcessMenuConnectRequest(void);
 static void RenderFrame(float fps);
 static void DrawSelectionBox(void);
 static void ApplyBoxSelection(bool additive);
@@ -601,6 +612,8 @@ static void RefreshLocalFaction(void) {
  * Handles a full packet message received from the server.
  * Applies the full level state contained in the packet.
  * Will fill in the level structure and mark it as initialized.
+ * Will also reset player selection, control groups, and camera state.
+ * Sets the client stage to the game stage upon success.
  * @param data Pointer to the packet data.
  * @param length Length of the packet data.
  */
@@ -608,6 +621,11 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     // Delegate to LevelApplyFullPacket to handle the actual data.
     if (!LevelApplyFullPacket(&level, data, length)) {
         printf("Failed to apply full packet.\n");
+
+        // We let the client know in the menu UI if we failed to load the level.
+        if (currentStage == CLIENT_STAGE_MENU) {
+            MenuUISetStatusMessage(&menuUI, "Failed to load level data from server.");
+        }
         return;
     }
 
@@ -637,6 +655,9 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     CameraSetZoom(&cameraState, 1.0f);
     RefreshCameraBounds();
     RefreshLocalFaction();
+
+    // Switch to the appropriate stage for gameplay.
+    currentStage = CLIENT_STAGE_GAME;
 }
 
 /**
@@ -851,62 +872,134 @@ static void SendJoinRequest(void) {
 
     // Report any send errors.
     if (result == SOCKET_ERROR) {
-        printf("sendto failed: %d\n", WSAGetLastError());
+        int error = WSAGetLastError();
+        printf("sendto failed: %d\n", error);
+
+        // In case of an error while in the menu stage,
+        // let the user know via the menu UI.
+        if (currentStage == CLIENT_STAGE_MENU) {
+            char status[MENU_STATUS_MAX_LENGTH + 1];
+            snprintf(status, sizeof(status), "Failed to send join request (error %d).", error);
+            MenuUISetStatusMessage(&menuUI, status);
+        }
     }
 }
 
 /**
- * Prompts the user for the server IP address and port.
- * Allocates a console window for input/output if necessary.
- * @return true if a valid address was provided, false otherwise.
+ * Processes a connect request from the menu UI.
+ * Validates the input IP address and port,
+ * creates a UDP socket, and sends a join request to the server.
  */
-static bool PromptForServerAddress(void) {
+static void ProcessMenuConnectRequest(void) {
+    // Allocate buffers for the IP address and port.
+    char ip[MENU_IP_MAX_LENGTH + 1];
+    char portBuffer[MENU_PORT_MAX_LENGTH + 1];
 
-    // Check if we need to allocate a console.
-    if (GetConsoleWindow() == NULL) {
-        // If so, we try to allocate one.
-        if (!AllocConsole()) {
-            printf("AllocConsole failed.\n");
-            return false;
-        }
+    // Try to see if the user has requested to connect to a server.
+    // This function must be called regularly to check for requests 
+    // (triggered by the user clicking the Connect button).
+    if (!MenuUIConsumeConnectRequest(&menuUI, ip, sizeof(ip), portBuffer, sizeof(portBuffer))) {
+        // No connect request to process.
+        return;
     }
 
-    // Redirect standard input and output to the console (freopen = "file reopen").
-    // Will make stdin and stdout point to the console window.
-    FILE *consoleIn = freopen("CONIN$", "r", stdin);
-    FILE *consoleOut = freopen("CONOUT$", "w", stdout);
+    // At this point, we have a connect request to process.
+    // First, validate the input IP address and port.
 
-    // Disable output buffering for the console output.
-    // Helps ensure that printf output appears immediately.
-    (void)consoleIn;
-    if (consoleOut != NULL) {
-        setvbuf(stdout, NULL, _IONBF, 0);
+    serverAddressValid = false;
+    memset(&serverAddress, 0, sizeof(serverAddress));
+
+    // Clean up any leading/trailing whitespace from the inputs.
+    TrimWhitespace(ip);
+    TrimWhitespace(portBuffer);
+
+    // Validate IP address.
+    if (ip[0] == '\0') {
+        // Triggered if the user did not enter an IP address.
+        MenuUISetStatusMessage(&menuUI, "Please enter a server IP address.");
+        return;
     }
 
-    // Prompt the user for IP address and port.
-    char ip[INET_ADDRSTRLEN] = {0};
-    int port = 0;
-
-    // An ip address is at most 15 characters long (xxx.xxx.xxx.xxx) plus null terminator.
-    printf("Enter server IP address: ");
-    if (scanf("%15s", ip) != 1) {
-        return false;
+    if (portBuffer[0] == '\0') {
+        // Triggered if the user did not enter a port.
+        MenuUISetStatusMessage(&menuUI, "Please enter a server port.");
+        return;
     }
 
-    // Prompt for port number (should be no more than 2^16-1 = 65535).
-    printf("Enter server port: ");
-    if (scanf("%d", &port) != 1) {
-        return false;
+    // Pointer to track the end of the parsed number.
+    char *endPtr = NULL;
+
+    // We convert the port string to a 64 bit integer not
+    // because somehow port numbers could be that big, but rather
+    // since we want to tell less well informed users that the port must be
+    // between 1 and 65535, rather than just "not a valid number",
+    // or worse yet, have a long get type cast into a 16 bit unsigned integer
+    // which would be registered as a valid port number, but not the one the user intended.
+
+    long portValue = strtol(portBuffer, &endPtr, 10);
+    if (endPtr == NULL || *endPtr != '\0') {
+        MenuUISetStatusMessage(&menuUI, "Port must be a number.");
+        return;
     }
 
-    // Try to create the server address structure.
-    if (!CreateAddress(ip, port, &serverAddress)) {
-        return false;
+    if (portValue <= 0 || portValue > 65535) {
+        MenuUISetStatusMessage(&menuUI, "Port must be between 1 and 65535.");
+        return;
     }
 
-    // We have a valid server address now, so mark it as such.
+    SOCKADDR_IN newAddress = {0};
+    if (!CreateAddress(ip, (int)portValue, &newAddress)) {
+        MenuUISetStatusMessage(&menuUI, "Failed to parse server address.");
+        return;
+    }
+
+    // Port and IP seem to be valid, proceed to create the socket and connect. 
+
+    // Clean up any existing socket first.
+    if (clientSocket != INVALID_SOCKET) {
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET;
+    }
+
+    // Create a new UDP socket.
+    clientSocket = CreateUDPSocket();
+    if (clientSocket == INVALID_SOCKET) {
+        MenuUISetStatusMessage(&menuUI, "Failed to create UDP socket.");
+        return;
+    }
+
+    // The socket must be non-blocking to avoid stalling the main loop
+    // when playing the game. It's a real time application after all.
+    // Of course, if in the future the application is multi-threaded
+    // such that network operations are done in a separate thread,
+    // this requirement could be relaxed.
+
+    if (!SetNonBlocking(clientSocket)) {
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET;
+        MenuUISetStatusMessage(&menuUI, "Failed to configure socket.");
+        return;
+    }
+
+    serverAddress = newAddress;
     serverAddressValid = true;
-    return true;
+
+    // Mark that we are now awaiting a full level packet
+    // and (re)set relevant state for the game.
+    
+    awaitingFull = true;
+    levelInitialized = false;
+    assignedFactionId = -1;
+    localFaction = NULL;
+
+    // While waiting for the full packet, update the menu status message
+    // so the user knows we are trying to connect.
+    char status[MENU_STATUS_MAX_LENGTH + 1];
+    snprintf(status, sizeof(status), "Connecting to %s:%ld...", ip, portValue);
+    MenuUISetStatusMessage(&menuUI, status);
+
+    // Delegate to helper function to send the actual join request.
+    SendJoinRequest();
 }
 
 /**
@@ -933,8 +1026,8 @@ static void RenderFrame(float fps) {
         // Add a soft glow gradient to the background.
         DrawBackgroundGradient(openglContext.width, openglContext.height);
 
-        // If the level is initialized, draw the planets, starships, and starship trails.
-        if (levelInitialized) {
+        // Depending on the current stage, draw either the game or the menu UI.
+        if (currentStage == CLIENT_STAGE_GAME && levelInitialized) {
             // Save the current matrix state.
             glPushMatrix();
 
@@ -964,26 +1057,32 @@ static void RenderFrame(float fps) {
         }
     }
 
-    // In case we are doing box selection, draw the selection box.
-    DrawSelectionBox();
+    // Don't need the level to be initialized to draw some UI elements.
+    if (currentStage == CLIENT_STAGE_GAME) {
+        // In case we are doing box selection, draw the selection box.
+        DrawSelectionBox();
 
-    // Draw the FPS, faction ID, and selection count in the top-left corner.
-    
-    int textPositionFromTop = 20;
-    int textPositionFromLeft = 10;
-    if (levelInitialized && openglContext.width >= textPositionFromLeft && openglContext.height >= textPositionFromTop) {
-        char infoString[160];
-        int selectionCount = selectionState.count;
-        int factionId = assignedFactionId >= 0 ? assignedFactionId : -1;
-        snprintf(infoString, sizeof(infoString),
-            "FPS: %.1f\nFaction ID: %d\nNumber of Selected Planets: %d",
-            fps,
-            factionId,
-            selectionCount);
+        // Draw the FPS, faction ID, and selection count in the top-left corner.
+        int textPositionFromTop = 20;
+        int textPositionFromLeft = 10;
+        if (levelInitialized && openglContext.width >= textPositionFromLeft && openglContext.height >= textPositionFromTop) {
+            char infoString[160];
+            int selectionCount = selectionState.count;
+            int factionId = assignedFactionId >= 0 ? assignedFactionId : -1;
+            snprintf(infoString, sizeof(infoString),
+                "FPS: %.1f\nFaction ID: %d\nNumber of Selected Planets: %d",
+                fps,
+                factionId,
+                selectionCount);
 
-        float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-        float textSize = 16.0f;
-        DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textColor);
+            float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            float textSize = 16.0f;
+            DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textColor);
+        }
+    } else {
+        // Only true if we are in the menu stage 
+        // (CLIENT_STAGE_MENU and CLIENT_STAGE_GAME are the only stages supported currently).
+        MenuUIDraw(&menuUI, &openglContext, openglContext.width, openglContext.height);
     }
 
     // Swap the front and back buffers to display the rendered frame.
@@ -1048,6 +1147,14 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // This message indicates a mouse button was pressed.
         // lParam contains the x and y coordinates of the mouse cursor.
         case WM_LBUTTONDOWN: {
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+
+            if (currentStage == CLIENT_STAGE_MENU) {
+                MenuUIHandleMouseDown(&menuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
             // Nothing to select if the level is not initialized or there is no local faction.
             if (!levelInitialized || localFaction == NULL) {
                 PlayerSelectionClear(&selectionState);
@@ -1055,8 +1162,6 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             // Get the mouse position from lParam.
-            int x = (int)(short)LOWORD(lParam);
-            int y = (int)(short)HIWORD(lParam);
             Vec2 screen = {(float)x, (float)y};
 
             // Initialize box selection state.
@@ -1080,13 +1185,19 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // wParam contains flags indicating which buttons are pressed.
         // lParam contains the x and y coordinates of the mouse cursor.
         case WM_MOUSEMOVE: {
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+
+            if (currentStage == CLIENT_STAGE_MENU) {
+                MenuUIHandleMouseMove(&menuUI, (float)x, (float)y);
+                return 0;
+            }
+
             if (!boxSelectActive || (wParam & MK_LBUTTON) == 0) {
                 return 0;
             }
 
             // Get the current mouse position from lParam.
-            int x = (int)(short)LOWORD(lParam);
-            int y = (int)(short)HIWORD(lParam);
             Vec2 screen = {(float)x, (float)y};
             boxSelectCurrentWorld = ScreenToWorld(screen);
 
@@ -1107,6 +1218,14 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // This message indicates a mouse button was released.
         // lParam contains the x and y coordinates of the mouse cursor.
         case WM_LBUTTONUP: {
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+
+            if (currentStage == CLIENT_STAGE_MENU) {
+                MenuUIHandleMouseUp(&menuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
             // If box selection is active, release mouse capture
             // so we stop receiving mouse events.
             if (boxSelectActive) {
@@ -1114,8 +1233,6 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             // Get the mouse position from lParam.
-            int x = (int)(short)LOWORD(lParam);
-            int y = (int)(short)HIWORD(lParam);
             Vec2 screen = {(float)x, (float)y};
             Vec2 mouseWorld = ScreenToWorld(screen);
             boxSelectCurrentWorld = mouseWorld;
@@ -1145,6 +1262,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
         // Right mouse button is used to issue move orders to selected planets.
         case WM_RBUTTONDOWN: {
+
+            // Right click does nothing in the menu.
+            if (currentStage == CLIENT_STAGE_MENU) {
+                return 0;
+            }
+
             // Cannot issue orders if the level is not initialized or there is no selection.
             if (!levelInitialized || selectionState.count == 0) {
                 return 0;
@@ -1175,6 +1298,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
         // Mousewheel movement is for zooming the camera in and out.
         case WM_MOUSEWHEEL: {
+            
+            // The mouse wheel currently does nothing in the menu.
+            if (currentStage == CLIENT_STAGE_MENU) {
+                return 0;
+            }
+
             // Nothing to zoom if no level is initialized.
             if (!levelInitialized) {
                 return 0;
@@ -1228,6 +1357,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // wParam contains the virtual-key code of the key that was pressed.
         // lParam contains additional information about the key event.
         case WM_KEYDOWN: {
+            
+            if (currentStage == CLIENT_STAGE_MENU) {
+                bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                MenuUIHandleKeyDown(&menuUI, wParam, shiftDown);
+                return 0;
+            }
 
             // Handle control group and selection shortcuts.
             bool handled = false;
@@ -1280,6 +1415,25 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // If the key was not handled, pass it to the default window procedure.
             return DefWindowProc(window_handle, msg, wParam, lParam);
         }
+
+        // WM_CHAR is sent when a character is input.
+        // wParam contains the character code of the key that was pressed.
+        // Compared to WM_KEYDOWN, which deals with virtual key codes,
+        // WM_CHAR takes into account keyboard layout and modifier keys.
+        // When a key is pressed, case WM_KEYDOWN is sent first,
+        // followed by WM_CHAR if the key corresponds to a character,
+        // according to TranslateMessage.
+        // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char
+        case WM_CHAR: {
+            if (currentStage == CLIENT_STAGE_MENU) {
+                MenuUIHandleChar(&menuUI, (unsigned int)wParam);
+                return 0;
+            }
+
+            // Outside of the menu, we don't handle character input,
+            // as instead we handle key presses in WM_KEYDOWN.
+            return DefWindowProc(window_handle, msg, wParam, lParam);
+        }
         default:
             //If the message is not handled by this procedure, 
             //pass it to the default window procedure.
@@ -1313,38 +1467,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     cameraState.minZoom = CAMERA_MIN_ZOOM;
     cameraState.maxZoom = CAMERA_MAX_ZOOM;
 
-    // Ask the user for the server address.
-    if (!PromptForServerAddress()) {
-        printf("Failed to obtain server address.\n");
-        return EXIT_FAILURE;
-    }
+    // Initialize the main menu UI state so the player can enter connection info.
+    MenuUIInitialize(&menuUI);
 
     // Initialize Winsock for networking.
     if (!InitializeWinsock()) {
         return EXIT_FAILURE;
     }
 
-    // Create the UDP socket for communication with the server.
-    clientSocket = CreateUDPSocket();
-    if (clientSocket == INVALID_SOCKET) {
-        WSACleanup();
-        return EXIT_FAILURE;
-    }
-
-    // Set the socket to non-blocking mode.
-    // As we are running the main loop in a single thread,
-    // we cannot afford to block on network operations.
-    if (!SetNonBlocking(clientSocket)) {
-        closesocket(clientSocket);
-        WSACleanup();
-        return EXIT_FAILURE;
-    }
-
-    // Send a join request to the server to initiate the connection.
-    SendJoinRequest();
-
-    // As the server processes the join request, we proceed to create the window
-    // which will graphically display the game state.
+    // Proceed to create the window which will host the menu and gameplay.
 
     // Create the window class to hold information about the window.
     static WNDCLASS window_class = {0};
@@ -1418,6 +1549,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     previousTicks = GetTicks();
     tickFrequency = GetTickFrequency();
 
+    // Set the cursor to be a regular arrow cursor.
+    SetCursor(LoadCursor(NULL, IDC_ARROW));
+
     // Main loop
     while (running) {
         // Handle any messages sent to the window.
@@ -1432,6 +1566,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             DispatchMessage(&message);
         }
 
+        // Process any connect requests from the menu UI.
+        // If we are not in the menu stage, this will do essentially nothing
+        ProcessMenuConnectRequest();
+
         // Process any incoming network messages from the server.
         ProcessNetworkMessages();
 
@@ -1440,12 +1578,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         float deltaTime = (float)(currentTicks - previousTicks) / (float)tickFrequency;
         previousTicks = currentTicks;
 
-        // Update the camera based on user input and elapsed time.
-        UpdateCamera(window_handle, deltaTime);
+        // We only have the concept of a camera in the game stage,
+        // and likewise we only have a level to update in the game stage.
+        if (currentStage == CLIENT_STAGE_GAME) {
+            // Update the camera based on user input and elapsed time.
+            UpdateCamera(window_handle, deltaTime);
 
-        // If we have a level and time has passed, we must update the level state.
-        if (levelInitialized && deltaTime > 0.0f) {
-            LevelUpdate(&level, deltaTime);
+            // If we have a level and time has passed, we must update the level state.
+            if (levelInitialized && deltaTime > 0.0f) {
+                LevelUpdate(&level, deltaTime);
+            }
         }
 
         // Calculate frames per second (FPS) for display.

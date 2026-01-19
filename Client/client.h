@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <ctype.h>
 
 #include "Utilities/networkUtilities.h"
 #include "Objects/level.h"
@@ -28,6 +29,7 @@
 #include "Utilities/openglUtilities.h"
 #include "Utilities/playerInterfaceUtilities.h"
 #include "Utilities/cameraUtilities.h"
+#include "Utilities/menuUtilities.h"
 
 // Minimum distance in pixels the mouse must move
 // for a left button drag to be considered a box selection 
@@ -52,5 +54,12 @@
 
 // How much the zoom changes each time a scroll of the mouse wheel is detected.
 #define CAMERA_ZOOM_FACTOR 1.1f
+
+// Defines the various stages the client application can be in.
+// Used to determine which logic and rendering to perform.
+typedef enum ClientStage {
+    CLIENT_STAGE_MENU = 0,
+    CLIENT_STAGE_GAME = 1
+} ClientStage;
 
 #endif // _CLIENT_H_

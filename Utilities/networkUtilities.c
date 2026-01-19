@@ -55,7 +55,7 @@ bool BindSocket(SOCKET sock, int port) {
     // this converts the port number from whatever endianness the executing machine has, to big-endian.
     local_address.sin_port = htons(port);
     // INADDR_ANY means that we will accept messages sent to any of the local machine's IP addresses 
-    // (of course, it has to be sent to the correct port as well, 6767 in this case).
+    // (of course, it has to be sent to the correct port as well).
     local_address.sin_addr.s_addr = INADDR_ANY;
 
     // bind() takes a socket, a pointer to a sockaddr structure (we have to cast our SOCKADDR_IN pointer to a SOCKADDR pointer),
