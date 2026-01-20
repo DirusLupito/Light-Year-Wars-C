@@ -36,7 +36,7 @@
 // rather than a simple click upon LMB release.
 #define BOX_SELECT_DRAG_THRESHOLD 6.0f
 
-// Howfar the mouse must be from the edge of the window
+// How far the mouse must be from the edge of the window
 // before edge panning begins (in pixels).
 #define CAMERA_EDGE_PAN_MARGIN 24.0f
 

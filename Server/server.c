@@ -40,6 +40,8 @@ static const Faction *FindAvailableFaction(void);
 static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
 static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
+static void RemovePlayer(Player *player);
+static void BroadcastServerShutdown(void);
 static Vec2 ScreenToWorld(Vec2 screen);
 static void ClampCameraToLevel(void);
 static void RefreshCameraBounds(void);
@@ -213,11 +215,17 @@ static void UpdateCamera(HWND window_handle, float deltaTime) {
 */
 LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+        // WM_CLOSE is sent when the user tries to close the window.
+        // Compared to WM_DESTROY, this message can be ignored or canceled.
         case WM_CLOSE: {
             DestroyWindow(window_handle);
             return 0;
         }
+
+        // WM_DESTROY is sent when the window is being destroyed.
+        // Compared to WM_CLOSE, this is a more final message.
         case WM_DESTROY: {
+            BroadcastServerShutdown();
             running = false;
             PostQuitMessage(0);
             return 0;
@@ -369,6 +377,47 @@ static Player *FindPlayerByAddress(const SOCKADDR_IN *address) {
 }
 
 /**
+ * Removes a player from the active player list, making their faction available again.
+ * @param player Pointer to the Player to remove.
+ */
+static void RemovePlayer(Player *player) {
+    // If the player pointer is invalid or there are no players, nothing to do.
+    if (player == NULL || playerCount == 0) {
+        return;
+    }
+
+    // If the player is not in the active list, nothing to do.
+    size_t index = (size_t)(player - players);
+    if (index >= playerCount) {
+        return;
+    }
+
+    // Store some info for logging before we remove the player.
+
+    // Get the player's faction.
+    const Faction *faction = player->faction;
+    char ipBuffer[INET_ADDRSTRLEN] = {0};
+
+    // Get the player's IP address as a string.
+    if (InetNtopA(AF_INET, (void *)&player->address.sin_addr, ipBuffer, sizeof(ipBuffer)) == NULL) {
+        snprintf(ipBuffer, sizeof(ipBuffer), "unknown");
+    }
+
+    // Move the last active player into the removed slot to keep the array packed.
+    size_t lastIndex = playerCount - 1;
+    if (index != lastIndex) {
+        players[index] = players[lastIndex];
+    }
+    players[lastIndex] = (Player){0};
+    playerCount -= 1;
+
+    // Log the player removal,
+    // and mark their faction as available again.
+    int factionId = faction != NULL ? faction->id : -1;
+    printf("Released player slot for %s (faction %d). Remaining players: %zu\n", ipBuffer, factionId, playerCount);
+}
+
+/**
  * Finds an available faction that is not currently assigned to any player.
  * @return A pointer to the available Faction, or NULL if none are available.
  */
@@ -453,6 +502,37 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
     printf("Registered player for %s assigned faction %d\n", ipBuffer, faction->id);
 
     return player;
+}
+
+/**
+ * Broadcasts a shutdown notice to all connected players so their clients can return to the menu.
+ */
+static void BroadcastServerShutdown(void) {
+    // If there is no valid server socket or no players, nothing to do.
+    if (server_socket == INVALID_SOCKET || playerCount == 0) {
+        return;
+    }
+
+    // Prepare the server shutdown packet.
+    // It's just a simple packet with the type field set,
+    // as no additional data is needed.
+    LevelServerShutdownPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_SERVER_SHUTDOWN;
+
+    // Every player needs to know about the server shutdown.
+    for (size_t i = 0; i < playerCount; ++i) {
+        int result = sendto(server_socket,
+            (const char *)&packet,
+            (int)sizeof(packet),
+            0,
+            (SOCKADDR *)&players[i].address,
+            (int)sizeof(players[i].address));
+
+        // Log any send errors.
+        if (result == SOCKET_ERROR) {
+            printf("server shutdown sendto failed: %d\n", WSAGetLastError());
+        }
+    }
 }
 
 /**
@@ -866,13 +946,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 }
             }
 
-            // If the packet wasn't handled yet, we check if it's a move order packet.
+            // If the packet wasn't handled yet, we check if it's a move order packet
+            // or a client disconnect packet.
             if (!handled && bytes_received >= (int)sizeof(uint32_t)) {
                 uint32_t packetType = 0;
                 memcpy(&packetType, recv_buffer, sizeof(uint32_t));
 
                 if (packetType == LEVEL_PACKET_TYPE_MOVE_ORDER) {
                     HandleMoveOrderPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
+                    handled = true;
+                } else if (packetType == LEVEL_PACKET_TYPE_CLIENT_DISCONNECT) {
+                    // It's a disconnect notice from a client.
+                    // We need to figure out which player is disconnecting
+                    // and remove them from the active player list.
+                    Player *player = FindPlayerByAddress(&sender_address);
+                    if (player != NULL) {
+                        RemovePlayer(player);
+                    } else {
+                        // If we can't find the player, we just log it and ignore.
+                        char ipBuffer[INET_ADDRSTRLEN] = {0};
+                        if (InetNtopA(AF_INET, (void *)&sender_address.sin_addr, ipBuffer, sizeof(ipBuffer)) == NULL) {
+                            snprintf(ipBuffer, sizeof(ipBuffer), "unknown");
+                        }
+                        printf("Disconnect notice from unknown sender %s ignored.\n", ipBuffer);
+                    }
                     handled = true;
                 }
             }

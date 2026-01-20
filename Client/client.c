@@ -119,9 +119,11 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length);
 static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length);
 static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length);
 static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length);
+static void HandleServerShutdownPacketMessage(const uint8_t *data, size_t length);
 static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
 static void SendJoinRequest(void);
+static void SendDisconnectNotice(void);
 static void ProcessMenuConnectRequest(void);
 static void RenderFrame(float fps);
 static void DrawSelectionBox(void);
@@ -714,6 +716,65 @@ static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length) {
 }
 
 /**
+ * Handles a server shutdown packet message received from the server.
+ * Forces the client back to the login menu and tears down any active session.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleServerShutdownPacketMessage(const uint8_t *data, size_t length) {
+    // Basic validation of input parameters.
+    if (data == NULL || length < sizeof(LevelServerShutdownPacket)) {
+        return;
+    }
+
+    // Cast the data to a LevelServerShutdownPacket and verify the type.
+    const LevelServerShutdownPacket *packet = (const LevelServerShutdownPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_SERVER_SHUTDOWN) {
+        return;
+    }
+
+    // Clean up all client state related to the active session.
+    // This includes:
+    // - Closing the client socket
+    // - Resetting server address state
+    // - Resetting level state
+    // - Resetting player interaction state
+    // - Resetting camera state
+    // - Returning to the login menu
+
+    // Best effort to close the existing socket so we stop receiving packets.
+    if (clientSocket != INVALID_SOCKET) {
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET;
+    }
+
+    // Reset server address state.
+    serverAddressValid = false;
+    awaitingFull = false;
+    levelInitialized = false;
+    assignedFactionId = -1;
+    localFaction = NULL;
+
+    // Clear any player interaction state so we start fresh when reconnecting.
+    PlayerSelectionReset(&selectionState, 0);
+    PlayerControlGroupsReset(&controlGroups, 0);
+    boxSelectActive = false;
+    boxSelectDragging = false;
+
+    // Release the level data so stale state is not reused.
+    LevelRelease(&level);
+
+    // Reset camera so menu rendering starts from a known state.
+    cameraState.position = Vec2Zero();
+    CameraSetZoom(&cameraState, 1.0f);
+    RefreshCameraBounds();
+
+    // Return to the login menu and inform the user.
+    currentStage = CLIENT_STAGE_LOGIN_MENU;
+    LoginMenuUISetStatusMessage(&loginMenuUI, "Disconnected: server closed.");
+}
+
+/**
  * Handles a fleet launch packet message received from the server.
  * Processes the fleet launch information and updates the level state.
  * Allows clients to simulate fleet launches initiated by other players,
@@ -843,6 +904,9 @@ static void ProcessNetworkMessages(void) {
             HandleAssignmentPacketMessage(payload, payloadSize);
         } else if (packetType == LEVEL_PACKET_TYPE_FLEET_LAUNCH) {
             HandleFleetLaunchPacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_SERVER_SHUTDOWN) {
+            HandleServerShutdownPacketMessage(payload, payloadSize);
+            break;
         } else {
             printf("Unknown packet type %u (%d bytes).\n", packetType, received);
         }
@@ -889,6 +953,33 @@ static void SendJoinRequest(void) {
 }
 
 /**
+ * Sends a disconnect notice to the server so it can free the client's slot.
+ * Best effort only; failures are logged but otherwise ignored.
+ */
+static void SendDisconnectNotice(void) {
+    // If the server address is not valid or the client socket is not valid, do nothing.
+    if (!serverAddressValid || clientSocket == INVALID_SOCKET) {
+        return;
+    }
+
+    // Prepare and send the disconnect packet.
+    LevelClientDisconnectPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_CLIENT_DISCONNECT;
+
+    int result = sendto(clientSocket,
+        (const char *)&packet,
+        (int)sizeof(packet),
+        0,
+        (struct sockaddr *)&serverAddress,
+        (int)sizeof(serverAddress));
+
+    // Report any send errors.
+    if (result == SOCKET_ERROR) {
+        printf("disconnect notice sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
  * Processes a connect request from the menu UI.
  * Validates the input IP address and port,
  * creates a UDP socket, and sends a join request to the server.
@@ -908,6 +999,10 @@ static void ProcessMenuConnectRequest(void) {
 
     // At this point, we have a connect request to process.
     // First, validate the input IP address and port.
+
+    if (serverAddressValid) {
+        SendDisconnectNotice();
+    }
 
     serverAddressValid = false;
     memset(&serverAddress, 0, sizeof(serverAddress));
@@ -1105,10 +1200,16 @@ static void RenderFrame(float fps) {
 */
 LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+        // WM_CLOSE is sent when the user tries to close the window.
+        // Compared to WM_DESTROY, this message can be ignored or canceled.
         case WM_CLOSE:
             DestroyWindow(window_handle);
             return 0;
+
+        // WM_DESTROY is sent when the window is being destroyed.
+        // Compared to WM_CLOSE, this is a more final message.
         case WM_DESTROY:
+            SendDisconnectNotice();
             running = false;
             PostQuitMessage(0);
             return 0;
