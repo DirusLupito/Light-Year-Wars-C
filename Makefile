@@ -7,6 +7,7 @@ GDI_FLAGS = -lgdi32 -lopengl32
 SERVER_DIR = Server
 CLIENT_DIR = Client
 UTILS_DIR = Utilities
+MENU_UTILS_DIR = $(UTILS_DIR)/MenuUtilities
 OBJS_DIR = Objects
 
 # Source Files
@@ -16,7 +17,7 @@ SERVER_SRC = $(SERVER_DIR)/server.c $(UTILS_DIR)/networkUtilities.c $(UTILS_DIR)
 CLIENT_SRC = $(CLIENT_DIR)/client.c \
 	$(UTILS_DIR)/networkUtilities.c $(UTILS_DIR)/gameUtilities.c $(UTILS_DIR)/renderUtilities.c \
 	$(UTILS_DIR)/openglUtilities.c $(UTILS_DIR)/cameraUtilities.c $(UTILS_DIR)/playerInterfaceUtilities.c \
-	$(UTILS_DIR)/menuUtilities.c \
+	$(MENU_UTILS_DIR)/commonMenuUtilities.c $(MENU_UTILS_DIR)/loginMenuUtilities.c \
 	$(OBJS_DIR)/level.c $(OBJS_DIR)/planet.c $(OBJS_DIR)/starship.c $(OBJS_DIR)/vec2.c $(OBJS_DIR)/faction.c $(OBJS_DIR)/player.c
 
 # Targets

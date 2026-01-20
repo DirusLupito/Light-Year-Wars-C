@@ -12,12 +12,12 @@
 
 // Defines the current stage of the client application.
 // Controls what logic and rendering is to be performed.
-static ClientStage currentStage = CLIENT_STAGE_MENU;
+static ClientStage currentStage = CLIENT_STAGE_LOGIN_MENU;
 
 // -- Menu UI variables --
 
-// Tracks the state of the main menu UI while waiting to connect.
-static MenuUIState menuUI = {0};
+// Tracks the state of the login menu UI while waiting to connect.
+static LoginMenuUIState loginMenuUI = {0};
 
 // -- Window and rendering variables --
 
@@ -622,9 +622,9 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     if (!LevelApplyFullPacket(&level, data, length)) {
         printf("Failed to apply full packet.\n");
 
-        // We let the client know in the menu UI if we failed to load the level.
-        if (currentStage == CLIENT_STAGE_MENU) {
-            MenuUISetStatusMessage(&menuUI, "Failed to load level data from server.");
+        // We let the client know in the login menu UI if we failed to load the level.
+        if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+            LoginMenuUISetStatusMessage(&loginMenuUI, "Failed to load level data from server.");
         }
         return;
     }
@@ -880,10 +880,10 @@ static void SendJoinRequest(void) {
 
         // In case of an error while in the menu stage,
         // let the user know via the menu UI.
-        if (currentStage == CLIENT_STAGE_MENU) {
-            char status[MENU_STATUS_MAX_LENGTH + 1];
+        if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+            char status[LOGIN_MENU_STATUS_MAX_LENGTH + 1];
             snprintf(status, sizeof(status), "Failed to send join request (error %d).", error);
-            MenuUISetStatusMessage(&menuUI, status);
+            LoginMenuUISetStatusMessage(&loginMenuUI, status);
         }
     }
 }
@@ -895,13 +895,13 @@ static void SendJoinRequest(void) {
  */
 static void ProcessMenuConnectRequest(void) {
     // Allocate buffers for the IP address and port.
-    char ip[MENU_IP_MAX_LENGTH + 1];
-    char portBuffer[MENU_PORT_MAX_LENGTH + 1];
+    char ip[LOGIN_MENU_IP_MAX_LENGTH + 1];
+    char portBuffer[LOGIN_MENU_PORT_MAX_LENGTH + 1];
 
     // Try to see if the user has requested to connect to a server.
     // This function must be called regularly to check for requests 
     // (triggered by the user clicking the Connect button).
-    if (!MenuUIConsumeConnectRequest(&menuUI, ip, sizeof(ip), portBuffer, sizeof(portBuffer))) {
+    if (!LoginMenuUIConsumeConnectRequest(&loginMenuUI, ip, sizeof(ip), portBuffer, sizeof(portBuffer))) {
         // No connect request to process.
         return;
     }
@@ -919,13 +919,13 @@ static void ProcessMenuConnectRequest(void) {
     // Validate IP address.
     if (ip[0] == '\0') {
         // Triggered if the user did not enter an IP address.
-        MenuUISetStatusMessage(&menuUI, "Please enter a server IP address.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Please enter a server IP address.");
         return;
     }
 
     if (portBuffer[0] == '\0') {
         // Triggered if the user did not enter a port.
-        MenuUISetStatusMessage(&menuUI, "Please enter a server port.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Please enter a server port.");
         return;
     }
 
@@ -941,18 +941,18 @@ static void ProcessMenuConnectRequest(void) {
 
     long portValue = strtol(portBuffer, &endPtr, 10);
     if (endPtr == NULL || *endPtr != '\0') {
-        MenuUISetStatusMessage(&menuUI, "Port must be a number.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Port must be a number.");
         return;
     }
 
     if (portValue <= 0 || portValue > 65535) {
-        MenuUISetStatusMessage(&menuUI, "Port must be between 1 and 65535.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Port must be between 1 and 65535.");
         return;
     }
 
     SOCKADDR_IN newAddress = {0};
     if (!CreateAddress(ip, (int)portValue, &newAddress)) {
-        MenuUISetStatusMessage(&menuUI, "Failed to parse server address.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Failed to parse server address.");
         return;
     }
 
@@ -967,7 +967,7 @@ static void ProcessMenuConnectRequest(void) {
     // Create a new UDP socket.
     clientSocket = CreateUDPSocket();
     if (clientSocket == INVALID_SOCKET) {
-        MenuUISetStatusMessage(&menuUI, "Failed to create UDP socket.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Failed to create UDP socket.");
         return;
     }
 
@@ -980,7 +980,7 @@ static void ProcessMenuConnectRequest(void) {
     if (!SetNonBlocking(clientSocket)) {
         closesocket(clientSocket);
         clientSocket = INVALID_SOCKET;
-        MenuUISetStatusMessage(&menuUI, "Failed to configure socket.");
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Failed to configure socket.");
         return;
     }
 
@@ -995,11 +995,11 @@ static void ProcessMenuConnectRequest(void) {
     assignedFactionId = -1;
     localFaction = NULL;
 
-    // While waiting for the full packet, update the menu status message
+    // While waiting for the full packet, update the login menu status message
     // so the user knows we are trying to connect.
-    char status[MENU_STATUS_MAX_LENGTH + 1];
+    char status[LOGIN_MENU_STATUS_MAX_LENGTH + 1];
     snprintf(status, sizeof(status), "Connecting to %s:%ld...", ip, portValue);
-    MenuUISetStatusMessage(&menuUI, status);
+    LoginMenuUISetStatusMessage(&loginMenuUI, status);
 
     // Delegate to helper function to send the actual join request.
     SendJoinRequest();
@@ -1083,9 +1083,9 @@ static void RenderFrame(float fps) {
             DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textSize / 2, textColor);
         }
     } else {
-        // Only true if we are in the menu stage 
-        // (CLIENT_STAGE_MENU and CLIENT_STAGE_GAME are the only stages supported currently).
-        MenuUIDraw(&menuUI, &openglContext, openglContext.width, openglContext.height);
+        // Only true if we are in the login menu stage 
+        // (CLIENT_STAGE_LOGIN_MENU and CLIENT_STAGE_GAME are the only stages supported currently).
+        LoginMenuUIDraw(&loginMenuUI, &openglContext, openglContext.width, openglContext.height);
     }
 
     // Swap the front and back buffers to display the rendered frame.
@@ -1153,8 +1153,8 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
-            if (currentStage == CLIENT_STAGE_MENU) {
-                MenuUIHandleMouseDown(&menuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+                LoginMenuUIHandleMouseDown(&loginMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
 
@@ -1191,8 +1191,8 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
-            if (currentStage == CLIENT_STAGE_MENU) {
-                MenuUIHandleMouseMove(&menuUI, (float)x, (float)y);
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+                LoginMenuUIHandleMouseMove(&loginMenuUI, (float)x, (float)y);
                 return 0;
             }
 
@@ -1224,8 +1224,8 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
-            if (currentStage == CLIENT_STAGE_MENU) {
-                MenuUIHandleMouseUp(&menuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+                LoginMenuUIHandleMouseUp(&loginMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
 
@@ -1267,7 +1267,7 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         case WM_RBUTTONDOWN: {
 
             // Right click does nothing in the menu.
-            if (currentStage == CLIENT_STAGE_MENU) {
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 return 0;
             }
 
@@ -1303,7 +1303,7 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         case WM_MOUSEWHEEL: {
             
             // The mouse wheel currently does nothing in the menu.
-            if (currentStage == CLIENT_STAGE_MENU) {
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 return 0;
             }
 
@@ -1361,9 +1361,9 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // lParam contains additional information about the key event.
         case WM_KEYDOWN: {
             
-            if (currentStage == CLIENT_STAGE_MENU) {
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-                MenuUIHandleKeyDown(&menuUI, wParam, shiftDown);
+                LoginMenuUIHandleKeyDown(&loginMenuUI, wParam, shiftDown);
                 return 0;
             }
 
@@ -1428,8 +1428,8 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // according to TranslateMessage.
         // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char
         case WM_CHAR: {
-            if (currentStage == CLIENT_STAGE_MENU) {
-                MenuUIHandleChar(&menuUI, (unsigned int)wParam);
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+                LoginMenuUIHandleChar(&loginMenuUI, (unsigned int)wParam);
                 return 0;
             }
 
@@ -1470,8 +1470,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     cameraState.minZoom = CAMERA_MIN_ZOOM;
     cameraState.maxZoom = CAMERA_MAX_ZOOM;
 
-    // Initialize the main menu UI state so the player can enter connection info.
-    MenuUIInitialize(&menuUI);
+    // Initialize the login menu UI state so the player can enter connection info.
+    LoginMenuUIInitialize(&loginMenuUI);
 
     // Initialize Winsock for networking.
     if (!InitializeWinsock()) {
