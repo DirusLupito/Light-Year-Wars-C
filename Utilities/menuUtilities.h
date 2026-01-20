@@ -86,6 +86,9 @@
 // Default outline color of input box when not focused
 #define MENU_INPUT_BOX_OUTLINE_COLOR {0.45f, 0.7f, 1.0f, 0.6f}
 
+// Alpha value of input box outline when focused
+#define MENU_INPUT_BOX_FOCUSED_ALPHA 0.95f
+
 // Fill color of input box
 #define MENU_INPUT_BOX_FILL_COLOR {0.08f, 0.1f, 0.18f, 0.85f}
 

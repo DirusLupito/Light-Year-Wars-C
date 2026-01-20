@@ -518,9 +518,10 @@ void MenuUIDraw(MenuUIState *state, OpenGLContext *context, int width, int heigh
 
     float ipOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
     
-    // If focused, make it a bit brighter.
+    // If focused, we change the outline color to let
+    // the user know.
     if (state->focus == MENU_FOCUS_IP) {
-        ipOutline[3] = 0.95f;
+        ipOutline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
     }
 
     float ipFill[4] = MENU_INPUT_BOX_FILL_COLOR;
@@ -550,9 +551,9 @@ void MenuUIDraw(MenuUIState *state, OpenGLContext *context, int width, int heigh
 
     float portOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
 
-    // If focused, make it a bit brighter.
+    // If focused, let the user know.
     if (state->focus == MENU_FOCUS_PORT) {
-        portOutline[3] = 0.95f;
+        portOutline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
     }
 
     float portFill[4] = MENU_INPUT_BOX_FILL_COLOR;
@@ -587,10 +588,7 @@ void MenuUIDraw(MenuUIState *state, OpenGLContext *context, int width, int heigh
     
     float buttonOutline[4] = MENU_BUTTON_OUTLINE_COLOR;
 
-    float buttonFillNormal[4] = MENU_BUTTON_FILL_COLOR;
-    float buttonFillHover[4] = MENU_BUTTON_HOVER_FILL_COLOR;
-
-    float *buttonFill = hover ? buttonFillHover : buttonFillNormal;
+    float *buttonFill = hover ? (float[])MENU_BUTTON_HOVER_FILL_COLOR : (float[])MENU_BUTTON_FILL_COLOR;
 
     DrawOutlinedRectangle(button.x, button.y, button.x + button.width, button.y + button.height, buttonOutline, buttonFill);
 
