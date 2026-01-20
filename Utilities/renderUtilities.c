@@ -428,15 +428,17 @@ void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
 
 /**
  * Renders text directly onto the screen at the specified coordinates.
+ * with the specified font height, width, and color.
  * @param context The OpenGL context containing rendering information.
  * @param text The null-terminated string of text to render.
  * @param x The x-coordinate on the screen to start rendering the text.
  * @param y The y-coordinate on the screen to start rendering the text.
  * @param fontPixelHeight The desired height of the font in pixels, or default of 16 if <= 0.
+ * @param fontPixelWidth The desired width of the font in pixels, or 0 for default width based on height.
  * @param color The RGBA color to use for rendering the text, or NULL for default white.
  */
 void DrawScreenText(OpenGLContext *context, const char *text, float x, float y,
-    float fontPixelHeight, const float color[4]) {
+    float fontPixelHeight, float fontPixelWidth, const float color[4]) {
 
     // Basic validation of input parameters.
     if (context == NULL || text == NULL) {
@@ -460,16 +462,25 @@ void DrawScreenText(OpenGLContext *context, const char *text, float x, float y,
     // so we take the absolute value and round it to the nearest whole number.
 
     float absHeight = fabsf(fontPixelHeight);
-    int roundedHeight = (int)(absHeight + 0.5f);
+
+    // We add 0.5 before casting to uint32_t to achieve rounding.
+    // This works because casting to an integer type truncates the decimal portion.
+    uint32_t roundedHeight = (uint32_t)(absHeight + 0.5f);
     if (roundedHeight <= 0) {
         roundedHeight = 1;
+    }
+
+    // Meanwhile, font width is optional, with 0 meaning "default width based on height".
+    // We just want to make sure it's not negative.
+    if (fontPixelWidth < 0.0f) {
+        fontPixelWidth = 0.0f;
     }
 
     // We have a dedicated helper function OpenGLAcquireFont which can create or retrieve
     // a font display list based on the specified font parameters.
     GLuint listBase = OpenGLAcquireFont(context, 
         -1 * roundedHeight, // Height of font. This is negative to indicate character height rather than cell height
-        0, // Width of font. 0 means default width based on height
+        (uint32_t)(fontPixelWidth + 0.5f), // Width of font. 0 means default width based on height.
         0, // Angle of escapement. Escapement is the angle between the baseline of a character and the x-axis of the device.
         0, // Orientation angle. This is the angle between the baseline of a character and the x-axis of the device.
         FW_NORMAL,  // Font weight. FW_NORMAL is normal weight.
@@ -481,7 +492,7 @@ void DrawScreenText(OpenGLContext *context, const char *text, float x, float y,
         CLIP_DEFAULT_PRECIS,  // Clipping precision
         ANTIALIASED_QUALITY,  // Output quality
         FF_DONTCARE | DEFAULT_PITCH, // Family and pitch of the font (don't care about family, default pitch)
-        "Segoe UI"); // Typeface name
+        "Consolas"); // Typeface name
         
     // A listBase of 0 indicates failure to acquire the font.
     if (listBase == 0) {

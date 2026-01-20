@@ -18,10 +18,12 @@
 
 #include "Utilities/renderUtilities.h"
 
-// Maximum lengths for the menu input fields (excluding null terminator).
+// Constants
 
 // Maximum length for the server IP address input field.
-#define MENU_IP_MAX_LENGTH 63
+// We only support IPv4 addresses for now, 
+// so 15 characters (excluding null terminator) is sufficient.
+#define MENU_IP_MAX_LENGTH 15
 
 // Maximum length for the server port input field.
 // Biggest valid port is 65535, which is 5 digits.
@@ -29,8 +31,6 @@
 
 // Maximum length for the status message.
 #define MENU_STATUS_MAX_LENGTH 127
-
-// UI layout constants
 
 // Width of the entire menu panel.
 #define MENU_FIELD_HEIGHT 44.0f
@@ -43,6 +43,60 @@
 
 // Padding around the menu panel.
 #define MENU_PANEL_PADDING 32.0f
+
+// Height of label text for input fields.
+#define MENU_LABEL_TEXT_HEIGHT 20.0f
+
+// Width of label text for input fields.
+#define MENU_LABEL_TEXT_WIDTH 10.0f
+
+// Height of text within input fields.
+#define MENU_INPUT_TEXT_HEIGHT 22.0f
+
+// Width of text within input fields.
+#define MENU_INPUT_TEXT_WIDTH 11.0f
+
+// Height of text within buttons.
+#define MENU_BUTTON_TEXT_HEIGHT 24.0f
+
+// Width of text within buttons.
+#define MENU_BUTTON_TEXT_WIDTH 12.0f
+
+// Height of generic text
+#define MENU_GENERIC_TEXT_HEIGHT 18.0f
+
+// Width of generic text
+#define MENU_GENERIC_TEXT_WIDTH 9.0f
+
+// Log in panel outline color
+#define MENU_PANEL_OUTLINE_COLOR {0.9f, 0.9f, 0.9f, 0.45f}
+
+// log in panel fill color
+#define MENU_PANEL_FILL_COLOR {0.1f, 0.1f, 0.12f, 0.75f}
+
+// Label text color
+#define MENU_LABEL_TEXT_COLOR {0.95f, 0.95f, 0.95f, 1.0f}
+
+// Input text color
+#define MENU_INPUT_TEXT_COLOR {0.98f, 0.98f, 0.98f, 1.0f}
+
+// Placeholder text color
+#define MENU_PLACEHOLDER_TEXT_COLOR {0.7f, 0.72f, 0.76f, 1.0f}
+
+// Default outline color of input box when not focused
+#define MENU_INPUT_BOX_OUTLINE_COLOR {0.45f, 0.7f, 1.0f, 0.6f}
+
+// Fill color of input box
+#define MENU_INPUT_BOX_FILL_COLOR {0.08f, 0.1f, 0.18f, 0.85f}
+
+// Outline color of button
+#define MENU_BUTTON_OUTLINE_COLOR {0.45f, 0.7f, 1.0f, 0.75f}
+
+// Fill color of button
+#define MENU_BUTTON_FILL_COLOR {0.12f, 0.2f, 0.35f, 0.9f}
+
+// Fill color of hovered button
+#define MENU_BUTTON_HOVER_FILL_COLOR {0.16f, 0.28f, 0.44f, 0.9f}
 
 // Data structures
 

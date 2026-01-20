@@ -236,7 +236,7 @@ void MenuUIInitialize(MenuUIState *state) {
     memset(state, 0, sizeof(*state));
 
     // Set initial focus.
-    state->focus = MENU_FOCUS_IP;
+    state->focus = MENU_FOCUS_NONE;
 
     // Prepare default status message.
     MenuUISetStatusMessage(state, "Enter the server IP and port, then click Connect.");
@@ -504,60 +504,121 @@ void MenuUIDraw(MenuUIState *state, OpenGLContext *context, int width, int heigh
     // Panel colors
 
     // Slightly light outline, dark fill.
-    float panelOutline[4] = {0.9f, 0.9f, 0.9f, 0.45f};
-    float panelFill[4] = {0.1f, 0.1f, 0.12f, 0.75f};
+    float panelOutline[4] = MENU_PANEL_OUTLINE_COLOR;
+    float panelFill[4] = MENU_PANEL_FILL_COLOR;
     DrawOutlinedRectangle(panel.x, panel.y, panel.x + panel.width, panel.y + panel.height, panelOutline, panelFill);
 
     // Draw the IP and port fields and the connect button.
     // Also draw labels and current contents.
-    const float labelColor[4] = {0.95f, 0.95f, 0.95f, 1.0f};
-    const float textColor[4] = {0.98f, 0.98f, 0.98f, 1.0f};
-    const float placeholderColor[4] = {0.7f, 0.72f, 0.76f, 1.0f};
+    const float labelColor[4] = MENU_LABEL_TEXT_COLOR;
+    const float textColor[4] = MENU_INPUT_TEXT_COLOR;
+    const float placeholderColor[4] = MENU_PLACEHOLDER_TEXT_COLOR;
 
     // IP Field
 
-    // Highlight outline in a different color if focused.
-    float ipOutline[4] = {0.45f, 0.7f, 1.0f, state->focus == MENU_FOCUS_IP ? 0.95f : 0.6f};
-    float ipFill[4] = {0.08f, 0.1f, 0.18f, 0.85f};
+    float ipOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+    
+    // If focused, make it a bit brighter.
+    if (state->focus == MENU_FOCUS_IP) {
+        ipOutline[3] = 0.95f;
+    }
+
+    float ipFill[4] = MENU_INPUT_BOX_FILL_COLOR;
     DrawOutlinedRectangle(ipField.x, ipField.y, ipField.x + ipField.width, ipField.y + ipField.height, ipOutline, ipFill);
-    DrawScreenText(context, "Server IP", ipField.x, ipField.y - 4.0f, 20.0f, labelColor);
+
+    // We just want to draw the label slightly above the field.
+    const char *ipLabel = "Server IP";
+    float ipLabelX = ipField.x;
+    float ipLabelY = ipField.y - 4.0f;
+    DrawScreenText(context, ipLabel, ipLabelX, ipLabelY, MENU_LABEL_TEXT_HEIGHT, MENU_LABEL_TEXT_WIDTH, labelColor);
 
     // Draw the current IP or placeholder.
+    // We want to center the IP text in the field vertically,
+    // while having it only a little bit in from the left horizontally.
     if (state->ipLength > 0) {
-        DrawScreenText(context, state->ipBuffer, ipField.x + 12.0f, ipField.y + 32.0f, 22.0f, textColor);
+        float ipTextX = ipField.x + 4.0f;
+        float ipTextY = ipField.y + (ipField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
+        DrawScreenText(context, state->ipBuffer, ipTextX, ipTextY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, textColor);
     } else {
-        DrawScreenText(context, "Ex: 127.0.0.1", ipField.x + 12.0f, ipField.y + 32.0f, 22.0f, placeholderColor);
+        const char *ipPlaceholderText = "Ex: 127.0.0.1";
+        float placeholderX = ipField.x + 4.0f;
+        float placeholderY = ipField.y + (ipField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
+        DrawScreenText(context, ipPlaceholderText, placeholderX, placeholderY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, placeholderColor);
     }
 
     // Port Field
 
-    // Highlight outline in a different color if focused.
-    float portOutline[4] = {0.45f, 0.7f, 1.0f, state->focus == MENU_FOCUS_PORT ? 0.95f : 0.6f};
-    float portFill[4] = {0.08f, 0.1f, 0.18f, 0.85f};
+    float portOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+
+    // If focused, make it a bit brighter.
+    if (state->focus == MENU_FOCUS_PORT) {
+        portOutline[3] = 0.95f;
+    }
+
+    float portFill[4] = MENU_INPUT_BOX_FILL_COLOR;
     DrawOutlinedRectangle(portField.x, portField.y, portField.x + portField.width, portField.y + portField.height, portOutline, portFill);
-    DrawScreenText(context, "Server Port", portField.x, portField.y - 4.0f, 20.0f, labelColor);
+
+    const char *portLabel = "Server Port";
+
+    // We just want to draw the label slightly above the field.
+    float portLabelX = portField.x;
+    float portLabelY = portField.y - 4.0f;
+
+    DrawScreenText(context, portLabel, portLabelX, portLabelY, MENU_LABEL_TEXT_HEIGHT, MENU_LABEL_TEXT_WIDTH, labelColor);
 
     // Draw the current port or placeholder.
+    // We want to center the port text in the field vertically,
+    // while having it only a little bit in from the left horizontally.
     if (state->portLength > 0) {
-        DrawScreenText(context, state->portBuffer, portField.x + 12.0f, portField.y + 32.0f, 22.0f, textColor);
+        float portTextX = portField.x + 4.0f;
+        float portTextY = portField.y + (portField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
+        DrawScreenText(context, state->portBuffer, portTextX, portTextY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, textColor);
     } else {
-        DrawScreenText(context, "Ex: 22311", portField.x + 12.0f, portField.y + 32.0f, 22.0f, placeholderColor);
+        const char *portPlaceholderText = "Ex: 22311";
+        float placeholderX = portField.x + 4.0f;
+        float placeholderY = portField.y + (portField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
+        DrawScreenText(context, portPlaceholderText, placeholderX, placeholderY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, placeholderColor);
     }
 
     // Connect Button
 
     // Change appearance if hovered.
     bool hover = MenuUIRectContains(&button, state->mouseX, state->mouseY);
-    float buttonOutline[4] = {0.45f, 0.7f, 1.0f, hover ? 1.0f : 0.75f};
-    float buttonFill[4] = {hover ? 0.16f : 0.12f, hover ? 0.28f : 0.2f, hover ? 0.44f : 0.35f, 0.9f};
+    
+    float buttonOutline[4] = MENU_BUTTON_OUTLINE_COLOR;
+
+    float buttonFillNormal[4] = MENU_BUTTON_FILL_COLOR;
+    float buttonFillHover[4] = MENU_BUTTON_HOVER_FILL_COLOR;
+
+    float *buttonFill = hover ? buttonFillHover : buttonFillNormal;
+
     DrawOutlinedRectangle(button.x, button.y, button.x + button.width, button.y + button.height, buttonOutline, buttonFill);
 
-    // I measured "Connect" text width to be about 89 pixels. 
-    // This approach is pretty bad but we don't have text measurement functionality yet.
-    DrawScreenText(context, "Connect", button.x + button.width / 2.0f - 89.0f / 2.0f, button.y + 32.0f, 24.0f, textColor);
+    // We want the text to be centered inside the panel.
+    // The height of the text is easy, it just comes from the constant.
+    // The width can be estimated based on character count and average character width.
+    const char *buttonText = "Connect";
+    float buttonTextWidth = strlen(buttonText) * MENU_BUTTON_TEXT_WIDTH;
+
+    // To center, we figure out how big the enclosing rectangle is,
+    // then since we have the text width and are giving the top left position,
+    // from which to begin drawing, we can just realize that half the width
+    // should be on either side of the center, and so the top left X position
+    // is the center minus half the text width:
+    float buttonTextX = button.x + (button.width / 2.0f) - (buttonTextWidth / 2.0f);
+
+    // To center vertically, we do the same thing but with height.
+    float buttonTextY = button.y + (button.height / 2.0f) + (MENU_BUTTON_TEXT_HEIGHT / 2.0f);
+
+    DrawScreenText(context, buttonText, buttonTextX, buttonTextY, MENU_BUTTON_TEXT_HEIGHT, MENU_BUTTON_TEXT_WIDTH, textColor);
 
     // Finally, draw the status message below the panel if it exists.
+    // We want it horizontally centered below the panel,
+    // and far enough below to not interfere with the panel.
     if (state->statusMessage[0] != '\0') {
-        DrawScreenText(context, state->statusMessage, panel.x, panel.y + panel.height + 24.0f, 18.0f, labelColor);
+        float statusTextWidth = strlen(state->statusMessage) * MENU_GENERIC_TEXT_WIDTH;
+        float statusTextX = panel.x + (panel.width / 2.0f) - (statusTextWidth / 2.0f);
+        float statusTextY = panel.y + panel.height + MENU_GENERIC_TEXT_HEIGHT;
+        DrawScreenText(context, state->statusMessage, statusTextX, statusTextY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, labelColor);
     }
 }

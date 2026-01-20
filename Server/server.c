@@ -777,11 +777,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     printf("Generating a random level...\n");
     LevelInit(&level);
     CameraInitialize(&cameraState);
-    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
+    float levelWidth = 4800.0f;
+    float levelHeight = 4800.0f;
+    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM / (fmaxf(levelWidth, levelHeight) / 2000.0f);
     cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
-    float level_width = 2400.0f;
-    float level_height = 2400.0f;
-    GenerateRandomLevel(&level, 12, 4, 20.0f, 70.0f, level_width, level_height, 3333);
+    GenerateRandomLevel(&level, 48, 4, 20.0f, 70.0f, levelWidth, levelHeight, 22311);
 
     // Once the level is generated, we can set the camera bounds.
     RefreshCameraBounds();
@@ -979,7 +979,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
                 float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
                 float textSize = 16.0f;
-                DrawScreenText(&openglContext, fpsString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textColor);
+                DrawScreenText(&openglContext, fpsString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textSize / 2, textColor);
             }
 
             // Swap the front and back buffers to display the rendered frame.

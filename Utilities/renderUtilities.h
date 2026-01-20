@@ -146,14 +146,16 @@ void DrawOutlinedRectangle(float x1, float y1, float x2, float y2,
 
 /**
  * Renders text directly onto the screen at the specified coordinates.
+ * with the specified font height, width, and color.
  * @param context The OpenGL context containing rendering information.
  * @param text The null-terminated string of text to render.
  * @param x The x-coordinate on the screen to start rendering the text.
  * @param y The y-coordinate on the screen to start rendering the text.
- * @param fontPixelHeight The desired height of the font in pixels.
- * @param color The RGBA color to use for rendering the text.
+ * @param fontPixelHeight The desired height of the font in pixels, or default of 16 if <= 0.
+ * @param fontPixelWidth The desired width of the font in pixels, or 0 for default width based on height.
+ * @param color The RGBA color to use for rendering the text, or NULL for default white.
  */
 void DrawScreenText(OpenGLContext *context, const char *text, float x, float y,
-    float fontPixelHeight, const float color[4]);
+    float fontPixelHeight, float fontPixelWidth, const float color[4]);
 
 #endif // _RENDER_UTILITIES_H_

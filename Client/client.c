@@ -43,7 +43,7 @@ static bool serverAddressValid = false;
 
 // Buffer for receiving data from the server.
 // Size is arbitrary but should be large enough to hold expected packets.
-static char recv_buffer[2048];
+static char recv_buffer[16384];
 
 // -- Game state variables --
 
@@ -656,6 +656,9 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     RefreshCameraBounds();
     RefreshLocalFaction();
 
+    // Update the min zoom based on the new level size.
+    cameraState.minZoom = CAMERA_MIN_ZOOM / (fmaxf(level.width, level.height) / 2000.0f);
+
     // Switch to the appropriate stage for gameplay.
     currentStage = CLIENT_STAGE_GAME;
 }
@@ -1070,14 +1073,14 @@ static void RenderFrame(float fps) {
             int selectionCount = selectionState.count;
             int factionId = assignedFactionId >= 0 ? assignedFactionId : -1;
             snprintf(infoString, sizeof(infoString),
-                "FPS: %.1f\nFaction ID: %d\nNumber of Selected Planets: %d",
+                "FPS: %.0f\nFaction ID: %d\nNumber of Selected Planets: %d",
                 fps,
                 factionId,
                 selectionCount);
 
             float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
             float textSize = 16.0f;
-            DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textColor);
+            DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textSize / 2, textColor);
         }
     } else {
         // Only true if we are in the menu stage 
