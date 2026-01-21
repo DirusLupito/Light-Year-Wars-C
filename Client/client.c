@@ -125,7 +125,7 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length);
 static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length);
 static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length);
 static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length);
-static void HandleServerShutdownPacketMessage(const uint8_t *data, size_t length);
+static void HandleServerDisconnectPacketMessage(const uint8_t *data, size_t length);
 static void ResetConnectionToMenu(const char *statusMessage);
 static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
@@ -765,33 +765,35 @@ static void ResetConnectionToMenu(const char *statusMessage) {
 }
 
 /**
- * Handles a server shutdown packet message received from the server.
+ * Handles a server disconnect packet message received from the server.
  * Forces the client back to the login menu and tears down any active session.
  * @param data Pointer to the packet data.
  * @param length Length of the packet data.
  */
-static void HandleServerShutdownPacketMessage(const uint8_t *data, size_t length) {
+static void HandleServerDisconnectPacketMessage(const uint8_t *data, size_t length) {
     // Basic validation of input parameters.
-    if (data == NULL || length < sizeof(LevelServerShutdownPacket)) {
+    if (data == NULL || length < sizeof(LevelServerDisconnectPacket)) {
         return;
     }
 
-    // Cast the data to a LevelServerShutdownPacket and verify the type.
-    const LevelServerShutdownPacket *packet = (const LevelServerShutdownPacket *)data;
-    if (packet->type != LEVEL_PACKET_TYPE_SERVER_SHUTDOWN) {
+    // Cast the data to a LevelServerDisconnectPacket and verify the type.
+    const LevelServerDisconnectPacket *packet = (const LevelServerDisconnectPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_SERVER_DISCONNECT) {
         return;
     }
 
-    // Clean up all client state related to the active session.
-    // This includes:
-    // - Closing the client socket
-    // - Resetting server address state
-    // - Resetting level state
-    // - Resetting player interaction state
-    // - Resetting camera state
-    // - Returning to the login menu
+    // Extract the reason for the disconnect from the packet.
+    char reason[sizeof(packet->reason) + 1];
+    memcpy(reason, packet->reason, sizeof(packet->reason));
+    reason[sizeof(packet->reason)] = '\0';
 
-    ResetConnectionToMenu("Disconnected: server closed.");
+    // If no reason was provided, use a default message.
+    if (reason[0] == '\0') {
+        snprintf(reason, sizeof(reason), "Disconnected.");
+    }
+
+    // Clean up and return to the login menu.
+    ResetConnectionToMenu(reason);
 }
 
 /**
@@ -926,8 +928,8 @@ static void ProcessNetworkMessages(void) {
             HandleAssignmentPacketMessage(payload, payloadSize);
         } else if (packetType == LEVEL_PACKET_TYPE_FLEET_LAUNCH) {
             HandleFleetLaunchPacketMessage(payload, payloadSize);
-        } else if (packetType == LEVEL_PACKET_TYPE_SERVER_SHUTDOWN) {
-            HandleServerShutdownPacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_SERVER_DISCONNECT) {
+            HandleServerDisconnectPacketMessage(payload, payloadSize);
             break;
         } else {
             printf("Unknown packet type %u (%d bytes).\n", packetType, received);

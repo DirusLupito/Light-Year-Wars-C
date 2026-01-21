@@ -447,6 +447,20 @@ static void UpdatePlayerTimeouts(float deltaTime) {
 
         // Check and handle timeout.
         if (player->inactivitySeconds >= CLIENT_TIMEOUT_SECONDS) {
+            if (server_socket != INVALID_SOCKET) {
+                LevelServerDisconnectPacket packet = {0};
+                packet.type = LEVEL_PACKET_TYPE_SERVER_DISCONNECT;
+                snprintf(packet.reason, sizeof(packet.reason), "Disconnected: inactive for too long.");
+                int result = sendto(server_socket,
+                    (const char *)&packet,
+                    (int)sizeof(packet),
+                    0,
+                    (SOCKADDR *)&player->address,
+                    (int)sizeof(player->address));
+                if (result == SOCKET_ERROR) {
+                    printf("disconnect notice sendto failed: %d\n", WSAGetLastError());
+                }
+            }
             char ipBuffer[INET_ADDRSTRLEN] = {0};
             if (InetNtopA(AF_INET, (void *)&player->address.sin_addr, ipBuffer, sizeof(ipBuffer)) == NULL) {
                 snprintf(ipBuffer, sizeof(ipBuffer), "unknown");
@@ -568,8 +582,9 @@ static void BroadcastServerShutdown(void) {
     // Prepare the server shutdown packet.
     // It's just a simple packet with the type field set,
     // as no additional data is needed.
-    LevelServerShutdownPacket packet = {0};
-    packet.type = LEVEL_PACKET_TYPE_SERVER_SHUTDOWN;
+    LevelServerDisconnectPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_SERVER_DISCONNECT;
+    snprintf(packet.reason, sizeof(packet.reason), "Disconnected: server closed.");
 
     // Every player needs to know about the server shutdown.
     for (size_t i = 0; i < playerCount; ++i) {

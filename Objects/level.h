@@ -39,8 +39,8 @@
 // Type value for a client disconnect packet (client -> server)
 #define LEVEL_PACKET_TYPE_CLIENT_DISCONNECT 6u
 
-// Type value for a server shutdown notice (server -> clients)
-#define LEVEL_PACKET_TYPE_SERVER_SHUTDOWN 7u
+// Type value for a targeted disconnect notice (server -> client)
+#define LEVEL_PACKET_TYPE_SERVER_DISCONNECT 7u
 
 // Definitions of packet structures used for network transmission.
 // We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
@@ -139,11 +139,13 @@ typedef struct LevelClientDisconnectPacket {
     uint32_t type;
 } LevelClientDisconnectPacket;
 
-// A LevelServerShutdownPacket notifies clients that the server is closing.
-// Clients should transition back to the login menu and inform the user.
-typedef struct LevelServerShutdownPacket {
+// A LevelServerDisconnectPacket notifies a specific client that it was disconnected.
+// This allows the server to communicate why the disconnection occurred as
+// opposed to just silently dropping the connection.
+typedef struct LevelServerDisconnectPacket {
     uint32_t type;
-} LevelServerShutdownPacket;
+    char reason[128];
+} LevelServerDisconnectPacket;
 
 // A LevelMoveOrderPacket communicates a set of origin planets and a destination
 // planet for fleet movement requests. It is sent by clients to the server.
