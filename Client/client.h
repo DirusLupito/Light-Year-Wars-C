@@ -55,6 +55,9 @@
 // How much the zoom changes each time a scroll of the mouse wheel is detected.
 #define CAMERA_ZOOM_FACTOR 1.1f
 
+// Time in milliseconds to wait before considering the server unresponsive.
+#define SERVER_TIMEOUT_MS 60000
+
 // Defines the various stages the client application can be in.
 // Used to determine which logic and rendering to perform.
 typedef enum ClientStage {

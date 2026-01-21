@@ -34,6 +34,10 @@ static CameraState cameraState = {0};
 // RNG State used to calculate ship spawn positions.
 static unsigned int shipSpawnRNGState = SHIP_SPAWN_SEED;
 
+// Time in seconds the server shall wait for a message before considering
+// a client to have timed out.
+static const float CLIENT_TIMEOUT_SECONDS = (float)CLIENT_TIMEOUT_MS / 1000.0f;
+
 // Forward declarations of static functions
 static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
@@ -41,6 +45,7 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
 static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
 static void RemovePlayer(Player *player);
+static void UpdatePlayerTimeouts(float deltaTime);
 static void BroadcastServerShutdown(void);
 static Vec2 ScreenToWorld(Vec2 screen);
 static void ClampCameraToLevel(void);
@@ -418,6 +423,46 @@ static void RemovePlayer(Player *player) {
 }
 
 /**
+ * Updates the inactivity timers for all connected players
+ * and removes any players that have timed out.
+ * @param deltaTime The time elapsed since the last update, in seconds.
+ */
+static void UpdatePlayerTimeouts(float deltaTime) {
+    // No players, or no time? No problem, nothing to do.
+    if (playerCount == 0 || deltaTime <= 0.0f) {
+        return;
+    }
+
+    // We use a while loop with an index so that we can
+    // properly handle player removals while iterating.
+    // A for loop would skip players if one is removed
+    // unless we decrement the index, and the idea
+    // of messing with a for loop index rather than just using
+    // a while loop with an explicit index seems worse.
+    size_t index = 0;
+    while (index < playerCount) {
+        // Increment the inactivity timer for this player.
+        Player *player = &players[index];
+        player->inactivitySeconds += deltaTime;
+
+        // Check and handle timeout.
+        if (player->inactivitySeconds >= CLIENT_TIMEOUT_SECONDS) {
+            char ipBuffer[INET_ADDRSTRLEN] = {0};
+            if (InetNtopA(AF_INET, (void *)&player->address.sin_addr, ipBuffer, sizeof(ipBuffer)) == NULL) {
+                snprintf(ipBuffer, sizeof(ipBuffer), "unknown");
+            }
+
+            // Log the timeout and remove the player.
+            printf("Disconnecting inactive player %s after %.0f ms of silence.\n",
+                ipBuffer, player->inactivitySeconds * 1000.0f);
+            RemovePlayer(player);
+            continue;
+        }
+        ++index;
+    }
+}
+
+/**
  * Finds an available faction that is not currently assigned to any player.
  * @return A pointer to the available Faction, or NULL if none are available.
  */
@@ -473,6 +518,10 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
         // we just update their endpoint and mark them as awaiting a full packet.
         PlayerUpdateEndpoint(existing, address);
         existing->awaitingFullPacket = true;
+
+        // We also reset their inactivity timer
+        // since they have just sent us a packet.
+        existing->inactivitySeconds = 0.0f;
         return existing;
     }
 
@@ -491,6 +540,9 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
     // using the found faction and provided address.
     Player *player = &players[playerCount++];
     PlayerInit(player, faction, address);
+
+    // Reset inactivity timer since this is a new player.
+    player->inactivitySeconds = 0.0f;
 
     // Log the new player registration
     // and report their assigned faction
@@ -658,6 +710,9 @@ static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data
     if (player == NULL || player->faction == NULL) {
         return;
     }
+
+    // Player sent a packet, ergo they are active.
+    player->inactivitySeconds = 0.0f;
 
     // Validate the destination planet.
     int32_t destinationIndex = packet->destinationPlanetIndex;
@@ -917,6 +972,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         if (bytes_received != SOCKET_ERROR) {
             bool handled = false;
 
+            // A player just sent us a packet, so they are active.
+            Player *senderPlayer = FindPlayerByAddress(&sender_address);
+            if (senderPlayer != NULL) {
+                senderPlayer->inactivitySeconds = 0.0f;
+            }
+
             // Check if the packet is a JOIN request.
             if (bytes_received >= 4 && strncmp(recv_buffer, "JOIN", 4) == 0) {
                 handled = true;
@@ -928,6 +989,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 // and send them the full level packet alongside their assignment.
                 Player *player = EnsurePlayerForAddress(&sender_address);
                 if (player != NULL) {
+                    // In case of a new player from a new address,
+                    // we reset their inactivity timer.
+                    // The earlier code for recieving a packet
+                    // and finding the sender player only handles existing players.
+                    player->inactivitySeconds = 0.0f;
                     SendFullPacketToPlayer(player, sock, &level);
                 } else {
                     // If there is no available faction or the server is full,
@@ -994,6 +1060,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
         // Update the level state
         LevelUpdate(&level, delta_time);
+
+        // Update player timeouts with the elapsed time.
+        UpdatePlayerTimeouts(delta_time);
 
         // Keep track of time for planet state broadcasting
         // Broadcasts now run at 20 Hz to keep ownership in sync.

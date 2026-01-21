@@ -12,12 +12,14 @@
 #include "Utilities/networkUtilities.h"
 
 // A player represents a user in the game.
-// Each player is uniquely associated with a network/IPv4 address
-// and a faction they uniquely control.
+// Each player is uniquely associated with a network/IPv4 address,
+// a faction they uniquely control, whether they are awaiting full level data,
+// and an inactivity timer used for timeouts on the server side.
 typedef struct Player {
     const Faction *faction;
     SOCKADDR_IN address;
     bool awaitingFullPacket;
+    float inactivitySeconds;
 } Player;
 
 /**

@@ -63,4 +63,8 @@
 // Default seed used for ship spawn position RNG if none is provided.
 #define SHIP_SPAWN_SEED 0x12345678u
 
+// Time in milliseconds the server shall wait for a message before considering
+// a client to have timed out.
+#define CLIENT_TIMEOUT_MS 60000
+
 #endif // _SERVER_H_

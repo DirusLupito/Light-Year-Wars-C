@@ -45,6 +45,12 @@ static bool serverAddressValid = false;
 // Size is arbitrary but should be large enough to hold expected packets.
 static char recv_buffer[16384];
 
+// Time since the last valid packet was received from the server.
+static float timeSinceLastServerPacket = 0.0f;
+
+// Timeout duration in seconds before considering the server unresponsive.
+static const float SERVER_TIMEOUT_SECONDS = (float)SERVER_TIMEOUT_MS / 1000.0f;
+
 // -- Game state variables --
 
 // Current level state.
@@ -120,6 +126,7 @@ static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length);
 static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length);
 static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length);
 static void HandleServerShutdownPacketMessage(const uint8_t *data, size_t length);
+static void ResetConnectionToMenu(const char *statusMessage);
 static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
 static void SendJoinRequest(void);
@@ -716,6 +723,48 @@ static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length) {
 }
 
 /**
+ * Helper function to reset the client connection
+ * and return to the login menu.
+ * Cleans up all session state and closes the socket.
+ * @param statusMessage Optional status message to display in the login menu.
+ */
+static void ResetConnectionToMenu(const char *statusMessage) {
+    // Best effort to close the existing socket so we stop receiving packets.
+    if (clientSocket != INVALID_SOCKET) {
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET;
+    }
+
+    // Reset server address state.
+    serverAddressValid = false;
+    awaitingFull = false;
+    levelInitialized = false;
+    assignedFactionId = -1;
+    localFaction = NULL;
+    timeSinceLastServerPacket = 0.0f;
+
+    // Clear any player interaction state so we start fresh when reconnecting.
+    PlayerSelectionReset(&selectionState, 0);
+    PlayerControlGroupsReset(&controlGroups, 0);
+    boxSelectActive = false;
+    boxSelectDragging = false;
+
+    // Release the level data so stale state is not reused.
+    LevelRelease(&level);
+
+    // Reset camera so menu rendering starts from a known state.
+    cameraState.position = Vec2Zero();
+    CameraSetZoom(&cameraState, 1.0f);
+    RefreshCameraBounds();
+
+    // Return to the login menu and inform the user.
+    currentStage = CLIENT_STAGE_LOGIN_MENU;
+    if (statusMessage != NULL) {
+        LoginMenuUISetStatusMessage(&loginMenuUI, statusMessage);
+    }
+}
+
+/**
  * Handles a server shutdown packet message received from the server.
  * Forces the client back to the login menu and tears down any active session.
  * @param data Pointer to the packet data.
@@ -742,36 +791,7 @@ static void HandleServerShutdownPacketMessage(const uint8_t *data, size_t length
     // - Resetting camera state
     // - Returning to the login menu
 
-    // Best effort to close the existing socket so we stop receiving packets.
-    if (clientSocket != INVALID_SOCKET) {
-        closesocket(clientSocket);
-        clientSocket = INVALID_SOCKET;
-    }
-
-    // Reset server address state.
-    serverAddressValid = false;
-    awaitingFull = false;
-    levelInitialized = false;
-    assignedFactionId = -1;
-    localFaction = NULL;
-
-    // Clear any player interaction state so we start fresh when reconnecting.
-    PlayerSelectionReset(&selectionState, 0);
-    PlayerControlGroupsReset(&controlGroups, 0);
-    boxSelectActive = false;
-    boxSelectDragging = false;
-
-    // Release the level data so stale state is not reused.
-    LevelRelease(&level);
-
-    // Reset camera so menu rendering starts from a known state.
-    cameraState.position = Vec2Zero();
-    CameraSetZoom(&cameraState, 1.0f);
-    RefreshCameraBounds();
-
-    // Return to the login menu and inform the user.
-    currentStage = CLIENT_STAGE_LOGIN_MENU;
-    LoginMenuUISetStatusMessage(&loginMenuUI, "Disconnected: server closed.");
+    ResetConnectionToMenu("Disconnected: server closed.");
 }
 
 /**
@@ -877,6 +897,8 @@ static void ProcessNetworkMessages(void) {
         if (serverAddressValid && fromAddress.sin_addr.s_addr != serverAddress.sin_addr.s_addr) {
             continue;
         }
+
+        timeSinceLastServerPacket = 0.0f;
 
         // If the received data is smaller than a uint32_t,
         // we cannot determine the packet type.
@@ -1089,6 +1111,7 @@ static void ProcessMenuConnectRequest(void) {
     levelInitialized = false;
     assignedFactionId = -1;
     localFaction = NULL;
+    timeSinceLastServerPacket = 0.0f;
 
     // While waiting for the full packet, update the login menu status message
     // so the user knows we are trying to connect.
@@ -1681,6 +1704,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         int64_t currentTicks = GetTicks();
         float deltaTime = (float)(currentTicks - previousTicks) / (float)tickFrequency;
         previousTicks = currentTicks;
+
+        // Update the time since we last received a packet from the server.
+        if (clientSocket != INVALID_SOCKET && serverAddressValid && deltaTime > 0.0f) {
+            timeSinceLastServerPacket += deltaTime;
+            if (timeSinceLastServerPacket >= SERVER_TIMEOUT_SECONDS) {
+                ResetConnectionToMenu("Disconnected: server timed out.");
+            }
+        }
 
         // We only have the concept of a camera in the game stage,
         // and likewise we only have a level to update in the game stage.

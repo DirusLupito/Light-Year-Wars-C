@@ -37,6 +37,11 @@ void PlayerInit(Player *player, const Faction *faction, const SOCKADDR_IN *addre
     // since they don't have any other way to get the static level
     // data (after all, snapshots only send dynamic data).
     player->awaitingFullPacket = true;
+
+    // Initialize inactivity timer to zero.
+    // Used to track time since last packet from this player
+    // on the server side for the sake of inactivity timeouts.
+    player->inactivitySeconds = 0.0f;
 }
 
 /**
