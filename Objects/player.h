@@ -17,6 +17,7 @@
 // and an inactivity timer used for timeouts on the server side.
 typedef struct Player {
     const Faction *faction;
+    int factionId;
     SOCKADDR_IN address;
     bool awaitingFullPacket;
     float inactivitySeconds;
@@ -36,6 +37,13 @@ void PlayerInit(Player *player, const Faction *faction, const SOCKADDR_IN *addre
  * @param address The new endpoint information.
  */
 void PlayerUpdateEndpoint(Player *player, const SOCKADDR_IN *address);
+
+/**
+ * Assigns a faction to the player and records its identifier for later rebinding.
+ * @param player The player to update.
+ * @param faction The faction to assign. May be NULL to clear assignment.
+ */
+void PlayerSetFaction(Player *player, const Faction *faction);
 
 /**
  * Checks whether the player matches the supplied address (by IPv4 address).

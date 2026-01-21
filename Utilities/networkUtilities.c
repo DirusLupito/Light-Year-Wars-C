@@ -6,8 +6,6 @@
 
 #include "Utilities/networkUtilities.h"
 
-static void SendAssignmentPacket(Player *player, SOCKET sock);
-
 /**
  * Initializes Winsock.
  * @return true if successful, false otherwise.
@@ -318,7 +316,7 @@ void BroadcastFleetLaunch(SOCKET sock, Player *players, size_t playerCount,
  * @param player The player to send the packet to.
  * @param sock The socket to use for sending.
  */
-static void SendAssignmentPacket(Player *player, SOCKET sock) {
+void SendAssignmentPacket(Player *player, SOCKET sock) {
     // Basic validation of input pointers.
     if (player == NULL) {
         return;
@@ -339,5 +337,116 @@ static void SendAssignmentPacket(Player *player, SOCKET sock) {
 
     if (result == SOCKET_ERROR) {
         printf("sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Sends a lobby state packet to a specific player.
+ * Used when a player joins the lobby to inform them of the current state
+ * of said lobby, including faction slots and level settings.
+ * @param player The player to send the packet to.
+ * @param sock The socket to use for sending.
+ * @param state The lobby state header to send.
+ * @param slots Array of slot info entries with length state->factionCount.
+ */
+void SendLobbyStateToPlayer(Player *player, SOCKET sock, const LevelLobbyStatePacket *state, const LevelLobbySlotInfo *slots) {
+    // Basic validation of input pointers.
+    if (player == NULL || state == NULL || slots == NULL) {
+        return;
+    }
+
+    // Calculate the total packet size (header + slots).
+    size_t headerSize = sizeof(*state);
+    size_t slotCount = (size_t)state->factionCount;
+    size_t slotsSize = slotCount * sizeof(LevelLobbySlotInfo);
+    size_t packetSize = headerSize + slotsSize;
+
+    // Check that the packet size is within valid limits for sendto.
+    if (packetSize > (size_t)INT_MAX) {
+        printf("Lobby state packet too large to send (size=%zu).\n", packetSize);
+        return;
+    }
+
+    // Allocate a buffer to hold the full packet data.
+    uint8_t *buffer = (uint8_t *)malloc(packetSize);
+    if (buffer == NULL) {
+        printf("Failed to allocate lobby state packet buffer.\n");
+        return;
+    }
+
+    // Copy the header and slots into the buffer.
+    memcpy(buffer, state, headerSize);
+    memcpy(buffer + headerSize, slots, slotsSize);
+
+    // Send the lobby state packet to the player's address using sendto.
+    int result = sendto(sock,
+        (const char *)buffer,
+        (int)packetSize,
+        0,
+        (SOCKADDR *)&player->address,
+        (int)sizeof(player->address));
+
+    // Report any send errors.
+    if (result == SOCKET_ERROR) {
+        printf("lobby state sendto failed: %d\n", WSAGetLastError());
+    }
+
+    // We no longer need the buffer, so free the allocated memory.
+    free(buffer);
+}
+
+/**
+ * Broadcasts the lobby state packet to all connected players.
+ * Used to inform all players of the current lobby state, including faction slots and level settings.
+ * Typically called whenever there is a change in the lobby, such as a player joining, leaving, 
+ * or changing their faction, or when the server updates level settings.
+ * @param sock The socket to use for sending.
+ * @param players The array of players to send the state to.
+ * @param playerCount The number of players in the array.
+ * @param state The lobby state header to send.
+ * @param slots Array of slot info entries with length state->factionCount.
+ */
+void BroadcastLobbyState(SOCKET sock, Player *players, size_t playerCount, const LevelLobbyStatePacket *state, const LevelLobbySlotInfo *slots) {
+    // Basic validation of input pointers.
+    if (players == NULL || state == NULL || slots == NULL || playerCount == 0) {
+        return;
+    }
+
+    // Iterate over all players and send them the lobby state packet.
+    for (size_t i = 0; i < playerCount; ++i) {
+        SendLobbyStateToPlayer(&players[i], sock, state, slots);
+    }
+}
+
+/**
+ * Broadcasts a start game packet to all connected players
+ * so their clients can transition from the lobby to the active game state.
+ * @param sock The socket to use for sending.
+ * @param players The array of players to send the packet to.
+ * @param playerCount The number of players in the array.
+ */
+void BroadcastStartGame(SOCKET sock, Player *players, size_t playerCount) {
+    // Basic validation of input pointers.
+    if (players == NULL || playerCount == 0) {
+        return;
+    }
+
+    // Create the start game packet.
+    LevelStartGamePacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_START_GAME;
+
+    // Iterate over all players and send them the start game packet.
+    for (size_t i = 0; i < playerCount; ++i) {
+        int result = sendto(sock,
+            (const char *)&packet,
+            (int)sizeof(packet),
+            0,
+            (SOCKADDR *)&players[i].address,
+            (int)sizeof(players[i].address));
+
+        // Report any send errors.
+        if (result == SOCKET_ERROR) {
+            printf("start game sendto failed: %d\n", WSAGetLastError());
+        }
     }
 }

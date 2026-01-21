@@ -30,6 +30,7 @@
 #include "Utilities/playerInterfaceUtilities.h"
 #include "Utilities/cameraUtilities.h"
 #include "Utilities/MenuUtilities/loginMenuUtilities.h"
+#include "Utilities/MenuUtilities/lobbyMenuUtilities.h"
 
 // Minimum distance in pixels the mouse must move
 // for a left button drag to be considered a box selection 
@@ -62,7 +63,8 @@
 // Used to determine which logic and rendering to perform.
 typedef enum ClientStage {
     CLIENT_STAGE_LOGIN_MENU = 0,
-    CLIENT_STAGE_GAME = 1
+    CLIENT_STAGE_LOBBY = 1,
+    CLIENT_STAGE_GAME = 2
 } ClientStage;
 
 #endif // _CLIENT_H_

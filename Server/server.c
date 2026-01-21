@@ -31,6 +31,27 @@ static SOCKET server_socket = INVALID_SOCKET;
 // Camera state used for navigating the server's spectator view.
 static CameraState cameraState = {0};
 
+// Current stage of the server application.
+static ServerStage currentStage = SERVER_STAGE_LOBBY;
+
+// Lobby UI state used while in the lobby stage.
+static LobbyMenuUIState lobbyMenuUI = {0};
+
+// Current lobby generation settings.
+// This also controls the default settings used when initializing a new lobby.
+static LobbyMenuGenerationSettings lobbySettings = {
+    .planetCount = 48,
+    .factionCount = 4,
+    .minFleetCapacity = 20.0f,
+    .maxFleetCapacity = 70.0f,
+    .levelWidth = 4800.0f,
+    .levelHeight = 4800.0f,
+    .randomSeed = 22311u
+};
+
+// Flag indicating whether the lobby state needs to be re-broadcasted to all players.
+static bool lobbyStateDirty = true;
+
 // RNG State used to calculate ship spawn positions.
 static unsigned int shipSpawnRNGState = SHIP_SPAWN_SEED;
 
@@ -52,6 +73,15 @@ static void ClampCameraToLevel(void);
 static void RefreshCameraBounds(void);
 static void ApplyCameraTransform(void);
 static void UpdateCamera(HWND window_handle, float deltaTime);
+static void InitializeLobbyState(void);
+static bool ConfigureLobbyFactions(size_t factionCount);
+static void RebindPlayerFactions(void);
+static void RefreshLobbySlots(void);
+static void BroadcastLobbyStateToAll(void);
+static void SendLobbyStateToPlayerInstance(Player *player);
+static void ProcessLobbyUI(float deltaTime);
+static bool AttemptStartGame(void);
+static int HighestAssignedFactionId(void);
 
 /**
  * Converts screen coordinates to world coordinates using the current camera state.
@@ -211,6 +241,357 @@ static void UpdateCamera(HWND window_handle, float deltaTime) {
 }
 
 /**
+ * Initializes the lobby state and UI.
+ * Configures factions and refreshes lobby slots.
+ */
+static void InitializeLobbyState(void) {
+    // Initialize the lobby UI state.
+    LobbyMenuUIInitialize(&lobbyMenuUI, true);
+
+    // Set the initial settings in the lobby UI.
+    LobbyMenuUISetSettings(&lobbyMenuUI, &lobbySettings);
+
+    // Clear any existing player slots.
+    LobbyMenuUIClearSlots(&lobbyMenuUI);
+
+    // Set the initial status message.
+    LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Adjust settings and press Start Game.");
+
+    // Try to configure factions based on the current settings.
+    if (!ConfigureLobbyFactions((size_t)lobbySettings.factionCount)) {
+        printf("Failed to configure lobby factions.\n");
+    }
+
+    // Refresh the lobby slots to match current player assignments.
+    RefreshLobbySlots();
+
+    // Mark the lobby state as dirty to ensure it is (re)broadcasted.
+    lobbyStateDirty = true;
+}
+
+/**
+ * Configures the level factions for the lobby based on the specified faction count.
+ * Initializes faction colors and sets level dimensions.
+ * @param factionCount The number of factions to configure.
+ * @return True if configuration was successful, false otherwise.
+ */
+static bool ConfigureLobbyFactions(size_t factionCount) {
+
+    // Try to configure the level with the specified number of factions.
+    if (!LevelConfigure(&level, factionCount, 0, 0)) {
+        printf("Failed to configure lobby factions.\n");
+        return false;
+    }
+
+    // Initialize faction colors in a simple pattern for visibility.
+    for (size_t i = 0; i < factionCount; ++i) {
+        // We first calculate a shade based on the faction index to ensure distinct colors.
+        float shade = 0.55f + 0.35f * ((float)(i % 3) / 2.0f);
+
+        // Then we assign colors cycling through red, green, and blue components.
+        level.factions[i] = CreateFaction((int)i, shade, 0.4f + 0.2f * (float)(i % 2), 0.6f + 0.25f * (float)((i + 1) % 2));
+    }
+
+    // Set the level dimensions based on the current lobby settings.
+    level.width = lobbySettings.levelWidth;
+    level.height = lobbySettings.levelHeight;
+    return true;
+}
+
+/**
+ * Rebinds player faction pointers based on their assigned faction IDs.
+ * Called after the level factions have been reconfigured to ensure players
+ * reference the correct faction instances.
+ */
+static void RebindPlayerFactions(void) {
+
+    // Iterate through all connected players and update their faction pointers.
+    for (size_t i = 0; i < playerCount; ++i) {
+        Player *player = &players[i];
+        int id = player->factionId;
+        const Faction *faction = NULL;
+
+        // Find the faction in the level that matches the player's assigned faction ID.
+        for (size_t j = 0; j < level.factionCount; ++j) {
+            if (level.factions[j].id == id) {
+                faction = &level.factions[j];
+                break;
+            }
+        }
+
+        // If we found a matching faction, assign it to the player.
+        if (faction != NULL) {
+            player->faction = faction;
+            player->factionId = faction->id;
+        } else {
+            // No matching faction found; clear the player's faction reference.
+            player->faction = NULL;
+        }
+    }
+}
+
+/**
+ * Refreshes the lobby slots in the UI to reflect current player assignments.
+ * Updates each slot's occupied status based on connected players.
+ */
+static void RefreshLobbySlots(void) {
+    // Set the total number of slots in the lobby UI to match the faction count.
+    LobbyMenuUISetSlotCount(&lobbyMenuUI, (size_t)lobbySettings.factionCount);
+
+
+    // Then iterate through each slot and determine if it is occupied by any player.
+    for (size_t i = 0; i < (size_t)lobbySettings.factionCount; ++i) {
+        bool occupied = false;
+        for (size_t j = 0; j < playerCount; ++j) {
+            if (players[j].factionId == (int)i) {
+                occupied = true;
+                break;
+            }
+        }
+        // Update the slot info in the lobby UI.
+        LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, (int)i, occupied);
+    }
+
+    // Now clear any highlighted faction ID.
+    LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, -1);
+}
+
+/**
+ * Determines the highest assigned faction ID among all connected players.
+ * Used to ensure lobby settings are valid before starting the game.
+ * @return The highest faction ID assigned to any player, or -1 if no players are connected.
+ */
+static int HighestAssignedFactionId(void) {
+    int maxId = -1;
+
+    // Iterate through all players to find the maximum faction ID.
+    for (size_t i = 0; i < playerCount; ++i) {
+        if (players[i].factionId > maxId) {
+            maxId = players[i].factionId;
+        }
+    }
+    return maxId;
+}
+
+/**
+ * Builds the lobby state packet and slot info array based on current settings and player assignments
+ * to be sent to players to inform them of the current lobby state.
+ * @param packet Pointer to the LevelLobbyStatePacket to populate.
+ * @param slots Array of LevelLobbySlotInfo to populate.
+ */
+static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *slots) {
+    // Validate parameters.
+    if (packet == NULL || slots == NULL) {
+        return;
+    }
+
+    // Clear the packet and populate it with current lobby settings.
+    memset(packet, 0, sizeof(*packet));
+    packet->type = LEVEL_PACKET_TYPE_LOBBY_STATE;
+    packet->factionCount = (uint32_t)lobbySettings.factionCount;
+    packet->planetCount = (uint32_t)lobbySettings.planetCount;
+    packet->minFleetCapacity = lobbySettings.minFleetCapacity;
+    packet->maxFleetCapacity = lobbySettings.maxFleetCapacity;
+    packet->levelWidth = lobbySettings.levelWidth;
+    packet->levelHeight = lobbySettings.levelHeight;
+    packet->randomSeed = lobbySettings.randomSeed;
+    packet->occupiedCount = (uint32_t)playerCount;
+
+    // Determine the total number of slots to populate.
+    // Will either be the faction count or the max slots allowed.
+    size_t slotCount = (size_t)lobbySettings.factionCount;
+    if (slotCount > LOBBY_MENU_MAX_SLOTS) {
+        slotCount = LOBBY_MENU_MAX_SLOTS;
+    }
+
+    // Populate each slot's info based on player assignments.
+    for (size_t i = 0; i < slotCount; ++i) {
+        slots[i].factionId = (int32_t)i;
+        slots[i].occupied = 0u;
+
+        // Clear reserved bytes, then iterate through players to see if any occupy this slot.
+        memset(slots[i].reserved, 0, sizeof(slots[i].reserved));
+        for (size_t j = 0; j < playerCount; ++j) {
+            if (players[j].factionId == (int)i) {
+                slots[i].occupied = 1u;
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Broadcasts the current lobby state to all connected players.
+ * Used to inform all players of the current lobby state, including faction slots and level settings.
+ * Typically called whenever there is a change in the lobby, such as a player joining, leaving, 
+ * or changing their faction, or when the server updates level settings.
+ */
+static void BroadcastLobbyStateToAll(void) {
+    // If there are no players or the server socket is invalid, there's nothing to do.
+    if (server_socket == INVALID_SOCKET || playerCount == 0) {
+        return;
+    }
+
+    // Build the lobby state packet and slot info array.
+    LevelLobbyStatePacket packet;
+    LevelLobbySlotInfo slots[LOBBY_MENU_MAX_SLOTS] = {0};
+    BuildLobbyPacket(&packet, slots);
+
+    // Broadcast the lobby state to all connected players.
+    BroadcastLobbyState(server_socket, players, playerCount, &packet, slots);
+}
+
+/**
+ * Sends the current lobby state to a specific player.
+ * Used when a player joins the lobby to inform them of the current state
+ * of said lobby, including faction slots and level settings.
+ * @param player The player to send the lobby state to.
+ */
+static void SendLobbyStateToPlayerInstance(Player *player) {
+    // Validate parameters.
+    if (player == NULL || server_socket == INVALID_SOCKET) {
+        return;
+    }
+
+    // Build the lobby state packet and slot info array.
+    LevelLobbyStatePacket packet;
+    LevelLobbySlotInfo slots[LOBBY_MENU_MAX_SLOTS] = {0};
+    BuildLobbyPacket(&packet, slots);
+
+    // Send the lobby state to the specified player.
+    SendLobbyStateToPlayer(player, server_socket, &packet, slots);
+}
+
+/**
+ * Processes the lobby UI input and handles start game requests.
+ * Updates lobby settings based on user input and attempts to start the game when requested.
+ * @param deltaTime The time elapsed since the last update, in seconds.
+ */
+static void ProcessLobbyUI(float deltaTime) {
+    (void)deltaTime;
+
+    // Parse the current settings from the lobby UI.
+    LobbyMenuGenerationSettings parsed;
+    if (LobbyMenuUIGetSettings(&lobbyMenuUI, &parsed)) {
+        // Check if any settings have changed.
+        bool factionChanged = parsed.factionCount != lobbySettings.factionCount;
+        bool settingsChanged = memcmp(&parsed, &lobbySettings, sizeof(parsed)) != 0;
+
+        // If so, validate and apply the new settings.
+        if (settingsChanged) {
+
+            // We need to ensure the faction count is sufficient for the connected players.
+            // We determine the highest assigned faction ID and ensure the count is at least that + 1.
+            int highestAssigned = HighestAssignedFactionId();
+            int minNeeded = (int)playerCount;
+            if (highestAssigned >= 0 && highestAssigned + 1 > minNeeded) {
+                minNeeded = highestAssigned + 1;
+            }
+
+            // If the new faction count is insufficient, set a status message and do not apply changes.
+            if (parsed.factionCount < minNeeded) {
+                char status[128];
+                snprintf(status, sizeof(status), "Increase the faction count to at least %d.", minNeeded);
+                LobbyMenuUISetStatusMessage(&lobbyMenuUI, status);
+            } else {
+                // Apply the new settings.
+                lobbySettings = parsed;
+                if (factionChanged) {
+                    ConfigureLobbyFactions((size_t)lobbySettings.factionCount);
+                    RebindPlayerFactions();
+                    RefreshLobbySlots();
+                }
+                lobbyStateDirty = true;
+                LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Adjust settings and press Start Game.");
+            }
+        }
+    }
+
+    // Check if a start game request has been made.
+    if (LobbyMenuUIConsumeStartRequest(&lobbyMenuUI)) {
+        if (!AttemptStartGame()) {
+            // AttemptStartGame will update the status message on failure.
+        }
+    }
+}
+
+/**
+ * Attempts to start the game using the current lobby settings.
+ * Validates settings and generates the level before transitioning to the game stage.
+ * @return True if the game was started successfully, false otherwise.
+ */
+static bool AttemptStartGame(void) {
+    LobbyMenuGenerationSettings parsed;
+
+    // Validate and retrieve the current settings from the lobby UI.
+    if (!LobbyMenuUIGetSettings(&lobbyMenuUI, &parsed)) {
+        LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Please enter valid values for all fields.");
+        return false;
+    }
+
+    // Ensure the faction count is sufficient for the connected players.
+    int highestAssigned = HighestAssignedFactionId();
+    int minNeeded = (int)playerCount;
+    if (highestAssigned >= 0 && highestAssigned + 1 > minNeeded) {
+        minNeeded = highestAssigned + 1;
+    }
+
+    // If the faction count is insufficient, set a status message and do not start the game.
+    if (parsed.factionCount < minNeeded) {
+        char status[128];
+        snprintf(status, sizeof(status), "Increase the faction count to at least %d.", minNeeded);
+        LobbyMenuUISetStatusMessage(&lobbyMenuUI, status);
+        return false;
+    }
+
+    // Try to generate the level with the provided settings.
+    if (!GenerateRandomLevel(&level,
+            (size_t)parsed.planetCount,
+            (size_t)parsed.factionCount,
+            parsed.minFleetCapacity,
+            parsed.maxFleetCapacity,
+            parsed.levelWidth,
+            parsed.levelHeight,
+            parsed.randomSeed)) {
+        LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Failed to generate level with the provided settings.");
+        return false;
+    }
+
+    // We successfully generated the level, so apply the new settings.
+    // We need to ensure all players are correctly bound to their factions,
+    // as well as refresh camera bounds and reset game state.
+    lobbySettings = parsed;
+    RebindPlayerFactions();
+    RefreshCameraBounds();
+    shipSpawnRNGState = SHIP_SPAWN_SEED;
+    planetStateAccumulator = 0.0f;
+    selected_planet = NULL;
+    CameraInitialize(&cameraState);
+    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM / (fmaxf(level.width, level.height) / 2000.0f);
+    cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
+    RefreshCameraBounds();
+
+    // Notify all players that the game is starting and send them the full level packet.
+    if (playerCount > 0) {
+        BroadcastStartGame(server_socket, players, playerCount);
+        for (size_t i = 0; i < playerCount; ++i) {
+            players[i].awaitingFullPacket = true;
+            SendFullPacketToPlayer(&players[i], server_socket, &level);
+        }
+    }
+
+    // Transition to the game stage.
+    currentStage = SERVER_STAGE_GAME;
+
+    // Clear the lobby state dirty flag and update the UI.
+    lobbyStateDirty = false;
+    LobbyMenuUISetStatusMessage(&lobbyMenuUI, NULL);
+    LobbyMenuUISetEditable(&lobbyMenuUI, false);
+    printf("Starting game with %zu players.\n", playerCount);
+    return true;
+}
+
+/**
  * Window procedure that handles messages sent to the window.
  * @param window_handle Handle to the window.
  * @param msg The message.
@@ -263,8 +644,10 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             // and the rendered scene will appear stretched or squashed.
             OpenGLUpdateProjection(&openglContext, newWidth, newHeight);
 
-            // Update the camera bounds to match the new level size.
-            ClampCameraToLevel();
+            // Update the camera bounds to match the new level size when in game.
+            if (currentStage == SERVER_STAGE_GAME) {
+                ClampCameraToLevel();
+            }
             return 0;
         }
         case WM_LBUTTONDOWN: {
@@ -273,7 +656,13 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int y = (int)(short)HIWORD(lParam);
             Vec2 mouseScreen = {(float)x, (float)y};
 
-            // Then convert to world coordinates.
+            // Then handle lobby UI interactions.
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIHandleMouseDown(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
+            // Otherwise if in game, handle planet selection and fleet launching.
             Vec2 mousePos = ScreenToWorld(mouseScreen);
 
             Planet *clicked = NULL;
@@ -305,6 +694,30 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             return 0;
         }
 
+        // On mouse move, we need to update the lobby UI hover state.
+        // Nothing in the game stage currently uses mouse move events.
+        case WM_MOUSEMOVE: {
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIHandleMouseMove(&lobbyMenuUI, (float)x, (float)y);
+            }
+            return 0;
+        }
+
+        // Likewise, on mouse up, we need to inform the lobby UI.
+        // Nothing in the game stage currently uses mouse up events.
+        case WM_LBUTTONUP: {
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIHandleMouseUp(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+            }
+            return 0;
+        }
+
         // Mousewheel movement is for zooming the camera in and out.
         case WM_MOUSEWHEEL: {
 
@@ -317,6 +730,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
             // No zoom change if there is no wheel movement.
             if (wheelDelta == 0) {
+                return 0;
+            }
+
+            // No zooming allowed in the lobby stage.
+            if (currentStage == SERVER_STAGE_LOBBY) {
                 return 0;
             }
 
@@ -350,6 +768,29 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
                 ClampCameraToLevel();
             }
             return 0;
+        }
+
+        // Handle keyboard input for lobby UI.
+        // WM_KEYDOWN is sent when a key is pressed down.
+        // It is suitable for handling non-text input, such as arrow keys
+        // or keys like shift.
+        case WM_KEYDOWN: {
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                LobbyMenuUIHandleKeyDown(&lobbyMenuUI, wParam, shiftDown);
+                return 0;
+            }
+            return DefWindowProc(window_handle, msg, wParam, lParam);
+        }
+
+        // Compared to WM_KEYDOWN, WM_CHAR is more suitable for text input,
+        // as it accounts for keyboard layout and modifier keys.
+        case WM_CHAR: {
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIHandleChar(&lobbyMenuUI, (unsigned int)wParam);
+                return 0;
+            }
+            return DefWindowProc(window_handle, msg, wParam, lParam);
         }
         default: {
             //If the message is not handled by this procedure, 
@@ -420,6 +861,13 @@ static void RemovePlayer(Player *player) {
     // and mark their faction as available again.
     int factionId = faction != NULL ? faction->id : -1;
     printf("Released player slot for %s (faction %d). Remaining players: %zu\n", ipBuffer, factionId, playerCount);
+
+    // When a player is removed, we need to refresh the lobby slots
+    // to reflect the newly available faction.
+    RefreshLobbySlots();
+
+    // Since we have changed the lobby state, mark it as dirty.
+    lobbyStateDirty = true;
 }
 
 /**
@@ -567,6 +1015,13 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
     }
     printf("Registered player for %s assigned faction %d\n", ipBuffer, faction->id);
 
+    // When a new player joins, we need to refresh the lobby slots
+    // to reflect the newly occupied faction.
+    RefreshLobbySlots();
+
+    // Since we have changed the lobby state, mark it as dirty.
+    lobbyStateDirty = true;
+
     return player;
 }
 
@@ -703,6 +1158,11 @@ static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data
     }
 
     if (size < sizeof(LevelMoveOrderPacket)) {
+        return;
+    }
+
+    // Move orders are only valid during the game stage.
+    if (currentStage != SERVER_STAGE_GAME) {
         return;
     }
 
@@ -924,17 +1384,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     int64_t previous_ticks = GetTicks();
     int64_t frequency = GetTickFrequency();
 
-    printf("Generating a random level...\n");
     LevelInit(&level);
     CameraInitialize(&cameraState);
-    float levelWidth = 4800.0f;
-    float levelHeight = 4800.0f;
-    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM / (fmaxf(levelWidth, levelHeight) / 2000.0f);
+    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
     cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
-    GenerateRandomLevel(&level, 48, 4, 20.0f, 70.0f, levelWidth, levelHeight, 22311);
-
-    // Once the level is generated, we can set the camera bounds.
-    RefreshCameraBounds();
+    InitializeLobbyState();
 
     printf("Entering main program loop...\n");
 
@@ -1001,7 +1455,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 recv_buffer[bytes_received] = '\0';
 
                 // Ensure a player exists for the sender's address
-                // and send them the full level packet alongside their assignment.
+                // and respond based on the current server stage.
                 Player *player = EnsurePlayerForAddress(&sender_address);
                 if (player != NULL) {
                     // In case of a new player from a new address,
@@ -1009,7 +1463,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                     // The earlier code for recieving a packet
                     // and finding the sender player only handles existing players.
                     player->inactivitySeconds = 0.0f;
-                    SendFullPacketToPlayer(player, sock, &level);
+
+                    if (currentStage == SERVER_STAGE_GAME) {
+                        SendFullPacketToPlayer(player, sock, &level);
+                    } else {
+                        SendAssignmentPacket(player, sock);
+                        SendLobbyStateToPlayerInstance(player);
+                    }
                 } else {
                     // If there is no available faction or the server is full,
                     // we send a SERVER_FULL message back to the client.
@@ -1070,21 +1530,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         float delta_time = (float)(current_ticks - previous_ticks) / (float)frequency;
         previous_ticks = current_ticks;
 
-        // Update the camera based on input
-        UpdateCamera(window_handle, delta_time);
+        // Depending on the current server stage, 
+        // we either update the game state or process the lobby UI.
+        if (currentStage == SERVER_STAGE_GAME) {
+            // Update the camera based on input
+            UpdateCamera(window_handle, delta_time);
 
-        // Update the level state
-        LevelUpdate(&level, delta_time);
+            // Update the level state
+            LevelUpdate(&level, delta_time);
+        } else {
+            ProcessLobbyUI(delta_time);
+        }
 
         // Update player timeouts with the elapsed time.
         UpdatePlayerTimeouts(delta_time);
 
-        // Keep track of time for planet state broadcasting
-        // Broadcasts now run at 20 Hz to keep ownership in sync.
-        planetStateAccumulator += delta_time;
-        while (planetStateAccumulator >= PLANET_STATE_BROADCAST_INTERVAL) {
-            BroadcastSnapshots(sock, &level, players, playerCount);
-            planetStateAccumulator -= PLANET_STATE_BROADCAST_INTERVAL;
+        // Broadcast planet state updates at fixed intervals during the game stage.
+        if (currentStage == SERVER_STAGE_GAME) {
+            // Keep track of time for planet state broadcasting
+            // Broadcasts now run at 20 Hz to keep ownership in sync.
+            planetStateAccumulator += delta_time;
+            while (planetStateAccumulator >= PLANET_STATE_BROADCAST_INTERVAL) {
+                BroadcastSnapshots(sock, &level, players, playerCount);
+                planetStateAccumulator -= PLANET_STATE_BROADCAST_INTERVAL;
+            }
+        } else if (lobbyStateDirty) {
+            BroadcastLobbyStateToAll();
+            lobbyStateDirty = false;
         }
 
         // Calculate frames per second (FPS)
@@ -1113,40 +1585,41 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 // Draw the background gradient
                 DrawBackgroundGradient(openglContext.width, openglContext.height);
 
-                // Save the current matrix state
-                // before applying camera transformations
-                // as it may change the modelview matrix.
-                glPushMatrix();
+                // We only draw the game elements if we are in the game stage.
+                if (currentStage == SERVER_STAGE_GAME) {
+                    // Save the current matrix state before applying camera transformations.
+                    glPushMatrix();
 
-                // Apply camera transformations (translation and scaling)
-                // to allow for panning and zooming.
-                ApplyCameraTransform();
+                    // Apply camera transformations (translation and scaling)
+                    // to allow for panning and zooming.
+                    ApplyCameraTransform();
 
-                // Draw each planet in the level
-                for (size_t i = 0; i < level.planetCount; ++i) {
-                    PlanetDraw(&level.planets[i]);
+                    // Draw each planet in the level
+                    for (size_t i = 0; i < level.planetCount; ++i) {
+                        PlanetDraw(&level.planets[i]);
+                    }
+
+                    // Draw each starship trail effect
+                    for (size_t i = 0; i < level.trailEffectCount; ++i) {
+                        StarshipTrailEffectDraw(&level.trailEffects[i]);
+                    }
+
+                    // If a planet is selected, draw a ring around it
+                    if (selected_planet != NULL) {
+                        float radius = PlanetGetOuterRadius(selected_planet);
+                        float highlightColor[4] = {1.0f, 1.0f, 1.0f, 0.85f};
+                        DrawFeatheredRing(selected_planet->position.x, selected_planet->position.y,
+                            radius + 2.0f, radius + 5.0f, 1.2f, highlightColor);
+                    }
+
+                    // Draw each starship in the level
+                    for (size_t i = 0; i < level.starshipCount; ++i) {
+                        StarshipDraw(&level.starships[i]);
+                    }
+
+                    // Restore the previous matrix state
+                    glPopMatrix();
                 }
-
-                // Draw each starship trail effect
-                for (size_t i = 0; i < level.trailEffectCount; ++i) {
-                    StarshipTrailEffectDraw(&level.trailEffects[i]);
-                }
-
-                // If a planet is selected, draw a ring around it
-                if (selected_planet != NULL) {
-                    float radius = PlanetGetOuterRadius(selected_planet);
-                    float highlightColor[4] = {1.0f, 1.0f, 1.0f, 0.85f};
-                    DrawFeatheredRing(selected_planet->position.x, selected_planet->position.y,
-                        radius + 2.0f, radius + 5.0f, 1.2f, highlightColor);
-                }
-
-                // Draw each starship in the level
-                for (size_t i = 0; i < level.starshipCount; ++i) {
-                    StarshipDraw(&level.starships[i]);
-                }
-
-                // Restore the previous matrix state
-                glPopMatrix();
             }
 
             // Display FPS in the top-left corner
@@ -1161,6 +1634,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
                 float textSize = 16.0f;
                 DrawScreenText(&openglContext, fpsString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textSize / 2, textColor);
+            }
+
+            // We only need to draw the lobby UI if we are in the lobby stage.
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
             }
 
             // Swap the front and back buffers to display the rendered frame.

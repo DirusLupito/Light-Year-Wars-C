@@ -25,7 +25,7 @@ void PlayerInit(Player *player, const Faction *faction, const SOCKADDR_IN *addre
 
     // We set the player's faction and address assuming the faction pointer is valid.
     // If the address pointer is NULL, we initialize the address to a default value.
-    player->faction = faction;
+    PlayerSetFaction(player, faction);
     if (address != NULL) {
         player->address = *address;
     } else {
@@ -42,6 +42,23 @@ void PlayerInit(Player *player, const Faction *faction, const SOCKADDR_IN *addre
     // Used to track time since last packet from this player
     // on the server side for the sake of inactivity timeouts.
     player->inactivitySeconds = 0.0f;
+}
+
+/**
+ * Assigns a faction to the player and records its identifier for later rebinding.
+ * @param player The player to update.
+ * @param faction The faction to assign.
+ */
+void PlayerSetFaction(Player *player, const Faction *faction) {
+    // Basic validation of input pointer.
+    if (player == NULL) {
+        return;
+    }
+
+    player->faction = faction;
+    
+    // Store the faction ID, or -1 if no faction is assigned.
+    player->factionId = (faction != NULL) ? faction->id : -1;
 }
 
 /**

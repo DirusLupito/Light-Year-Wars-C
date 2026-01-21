@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "Objects/level.h"
 #include "Objects/player.h"
@@ -116,5 +117,46 @@ void BroadcastSnapshots(SOCKET sock, const Level *level, Player *players, size_t
 void BroadcastFleetLaunch(SOCKET sock, Player *players, size_t playerCount,
     int32_t originPlanetIndex, int32_t destinationPlanetIndex,
     int32_t shipCount, int32_t ownerFactionId, unsigned int shipSpawnRNGState);
+
+/**
+ * Sends a level assignment packet to a specific player.
+ * This packet informs the player of their assigned faction ID.
+ * @param player The player to send the packet to.
+ * @param sock The socket to use for sending.
+ */
+void SendAssignmentPacket(Player *player, SOCKET sock);
+
+/**
+ * Sends a lobby state packet to a specific player.
+ * Used when a player joins the lobby to inform them of the current state
+ * of said lobby, including faction slots and level settings.
+ * @param player The player to send the packet to.
+ * @param sock The socket to use for sending.
+ * @param state The lobby state header to send.
+ * @param slots Array of slot info entries with length state->factionCount.
+ */
+void SendLobbyStateToPlayer(Player *player, SOCKET sock, const LevelLobbyStatePacket *state, const LevelLobbySlotInfo *slots);
+
+/**
+ * Broadcasts the lobby state packet to all connected players.
+ * Used to inform all players of the current lobby state, including faction slots and level settings.
+ * Typically called whenever there is a change in the lobby, such as a player joining, leaving, 
+ * or changing their faction, or when the server updates level settings.
+ * @param sock The socket to use for sending.
+ * @param players The array of players to send the state to.
+ * @param playerCount The number of players in the array.
+ * @param state The lobby state header to send.
+ * @param slots Array of slot info entries with length state->factionCount.
+ */
+void BroadcastLobbyState(SOCKET sock, Player *players, size_t playerCount, const LevelLobbyStatePacket *state, const LevelLobbySlotInfo *slots);
+
+/**
+ * Broadcasts a start game packet to all connected players
+ * so their clients can transition from the lobby to the active game state.
+ * @param sock The socket to use for sending.
+ * @param players The array of players to send the packet to.
+ * @param playerCount The number of players in the array.
+ */
+void BroadcastStartGame(SOCKET sock, Player *players, size_t playerCount);
 
 #endif // _NETWORK_UTILITIES_H_

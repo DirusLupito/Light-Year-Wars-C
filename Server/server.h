@@ -26,6 +26,7 @@
 #include "Utilities/renderUtilities.h"
 #include "Utilities/openglUtilities.h"
 #include "Utilities/cameraUtilities.h"
+#include "Utilities/MenuUtilities/lobbyMenuUtilities.h"
 #include "Objects/level.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
@@ -66,5 +67,14 @@
 // Time in milliseconds the server shall wait for a message before considering
 // a client to have timed out.
 #define CLIENT_TIMEOUT_MS 60000
+
+/**
+ * Defines the various stages the server application can be in.
+ * Used to determine which logic and rendering to perform.
+ */
+typedef enum ServerStage {
+    SERVER_STAGE_LOBBY = 0,
+    SERVER_STAGE_GAME = 1
+} ServerStage;
 
 #endif // _SERVER_H_

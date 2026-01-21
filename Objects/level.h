@@ -42,6 +42,12 @@
 // Type value for a targeted disconnect notice (server -> client)
 #define LEVEL_PACKET_TYPE_SERVER_DISCONNECT 7u
 
+// Type value for a lobby state packet (server -> clients)
+#define LEVEL_PACKET_TYPE_LOBBY_STATE 8u
+
+// Type value for a start game packet (server -> clients)
+#define LEVEL_PACKET_TYPE_START_GAME 9u
+
 // Definitions of packet structures used for network transmission.
 // We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
 // This translates to "pack the following structures with 1-byte alignment".
@@ -146,6 +152,33 @@ typedef struct LevelServerDisconnectPacket {
     uint32_t type;
     char reason[128];
 } LevelServerDisconnectPacket;
+
+// A LevelLobbySlotInfo communicates who occupies a given faction slot in the lobby.
+// occupied is 1 when filled by a player, otherwise 0. Additional bytes are reserved for alignment.
+typedef struct LevelLobbySlotInfo {
+    int32_t factionId;
+    uint8_t occupied;
+    uint8_t reserved[3];
+} LevelLobbySlotInfo;
+
+// A LevelLobbyStatePacket communicates the lobby configuration and slot occupancy.
+// It is followed by factionCount LevelLobbySlotInfo entries.
+typedef struct LevelLobbyStatePacket {
+    uint32_t type;
+    uint32_t factionCount;
+    uint32_t planetCount;
+    float minFleetCapacity;
+    float maxFleetCapacity;
+    float levelWidth;
+    float levelHeight;
+    uint32_t randomSeed;
+    uint32_t occupiedCount;
+} LevelLobbyStatePacket;
+
+// A LevelStartGamePacket notifies clients that the lobby is transitioning into gameplay.
+typedef struct LevelStartGamePacket {
+    uint32_t type;
+} LevelStartGamePacket;
 
 // A LevelMoveOrderPacket communicates a set of origin planets and a destination
 // planet for fleet movement requests. It is sent by clients to the server.

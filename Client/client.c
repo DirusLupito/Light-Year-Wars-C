@@ -19,6 +19,9 @@ static ClientStage currentStage = CLIENT_STAGE_LOGIN_MENU;
 // Tracks the state of the login menu UI while waiting to connect.
 static LoginMenuUIState loginMenuUI = {0};
 
+// Tracks the state of the lobby UI once connected to the server.
+static LobbyMenuUIState lobbyMenuUI = {0};
+
 // -- Window and rendering variables --
 
 // Running = true while the main loop should continue
@@ -126,6 +129,8 @@ static void HandleSnapshotPacketMessage(const uint8_t *data, size_t length);
 static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length);
 static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length);
 static void HandleServerDisconnectPacketMessage(const uint8_t *data, size_t length);
+static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length);
+static void HandleStartGamePacketMessage(const uint8_t *data, size_t length);
 static void ResetConnectionToMenu(const char *statusMessage);
 static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
@@ -668,6 +673,11 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     // Update the min zoom based on the new level size.
     cameraState.minZoom = CAMERA_MIN_ZOOM / (fmaxf(level.width, level.height) / 2000.0f);
 
+    // Clear any status messages in the lobby UI
+    // and reset the slots to empty.
+    LobbyMenuUISetStatusMessage(&lobbyMenuUI, NULL);
+    LobbyMenuUIClearSlots(&lobbyMenuUI);
+
     // Switch to the appropriate stage for gameplay.
     currentStage = CLIENT_STAGE_GAME;
 }
@@ -720,6 +730,10 @@ static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length) {
     // Update the assigned faction ID and refresh the local faction pointer.
     assignedFactionId = packet->factionId;
     RefreshLocalFaction();
+
+    // Update the lobby UI to highlight the assigned faction slot,
+    // since it's our slot and we want to know where we are.
+    LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, assignedFactionId);
 }
 
 /**
@@ -751,6 +765,9 @@ static void ResetConnectionToMenu(const char *statusMessage) {
 
     // Release the level data so stale state is not reused.
     LevelRelease(&level);
+
+    // Reset lobby UI to its default read-only state.
+    LobbyMenuUIInitialize(&lobbyMenuUI, false);
 
     // Reset camera so menu rendering starts from a known state.
     cameraState.position = Vec2Zero();
@@ -852,6 +869,112 @@ static void HandleFleetLaunchPacketMessage(const uint8_t *data, size_t length) {
 }
 
 /**
+ * Handles a lobby state packet message received from the server.
+ * Updates the local lobby UI state with settings and slot occupancy.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
+    // Basic validation of input parameters.
+    if (data == NULL || length < sizeof(LevelLobbyStatePacket)) {
+        return;
+    }
+
+    // Cast the data to a LevelLobbyStatePacket and verify the type.
+    const LevelLobbyStatePacket *packet = (const LevelLobbyStatePacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_LOBBY_STATE) {
+        return;
+    }
+
+    // Ensure the faction count does not exceed the maximum slots.
+    size_t slotCount = (size_t)packet->factionCount;
+    if (slotCount > LOBBY_MENU_MAX_SLOTS) {
+        slotCount = LOBBY_MENU_MAX_SLOTS;
+    }
+
+    // Verify that the packet length is sufficient for the expected number of slots.
+    size_t expectedSize = sizeof(LevelLobbyStatePacket) + slotCount * sizeof(LevelLobbySlotInfo);
+    if (length < expectedSize) {
+        return;
+    }
+
+    // Extract lobby settings from the packet and update the lobby UI.
+    LobbyMenuGenerationSettings settings = {0};
+    settings.planetCount = (int)packet->planetCount;
+    settings.factionCount = (int)packet->factionCount;
+    settings.minFleetCapacity = packet->minFleetCapacity;
+    settings.maxFleetCapacity = packet->maxFleetCapacity;
+    settings.levelWidth = packet->levelWidth;
+    settings.levelHeight = packet->levelHeight;
+    settings.randomSeed = packet->randomSeed;
+
+    LobbyMenuUISetSettings(&lobbyMenuUI, &settings);
+    LobbyMenuUIClearSlots(&lobbyMenuUI);
+    LobbyMenuUISetSlotCount(&lobbyMenuUI, slotCount);
+
+    // Update each slot's information based on the packet data.
+    const LevelLobbySlotInfo *slots = (const LevelLobbySlotInfo *)(data + sizeof(LevelLobbyStatePacket));
+    for (size_t i = 0; i < slotCount; ++i) {
+        bool occupied = slots[i].occupied != 0u;
+        LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, slots[i].factionId, occupied);
+    }
+
+    // Highlight our assigned faction slot and update status message.
+    LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, assignedFactionId);
+    LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Waiting for host to start game.");
+
+    // If we are not already in the lobby stage, switch to it.
+    if (currentStage != CLIENT_STAGE_LOBBY) {
+        // Clean up any existing level state.
+        if (levelInitialized) {
+            LevelRelease(&level);
+            levelInitialized = false;
+        }
+        // And reset other session state.
+        localFaction = NULL;
+        awaitingFull = true;
+        PlayerSelectionReset(&selectionState, 0);
+        PlayerControlGroupsReset(&controlGroups, 0);
+        boxSelectActive = false;
+        boxSelectDragging = false;
+        currentStage = CLIENT_STAGE_LOBBY;
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Connected to lobby.");
+    }
+}
+
+/**
+ * Handles a start game packet message received from the server.
+ * Prepares the client to receive a new full state for gameplay.
+ * @param data Pointer to the packet data.
+ * @param length Length of the packet data.
+ */
+static void HandleStartGamePacketMessage(const uint8_t *data, size_t length) {
+    // Basic validation of input parameters.
+    if (data == NULL || length < sizeof(LevelStartGamePacket)) {
+        return;
+    }
+
+    // Cast the data to a LevelStartGamePacket and verify the type.
+    const LevelStartGamePacket *packet = (const LevelStartGamePacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_START_GAME) {
+        return;
+    }
+
+    // Prepare to receive a new full level state.
+    // Clean up any existing level state, and set flags accordingly
+    // so we're good to transition into gameplay once the full packet arrives.
+    awaitingFull = true;
+    levelInitialized = false;
+    PlayerSelectionReset(&selectionState, 0);
+    PlayerControlGroupsReset(&controlGroups, 0);
+    boxSelectActive = false;
+    boxSelectDragging = false;
+    LevelRelease(&level);
+    localFaction = NULL;
+    LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Loading game...");
+}
+
+/**
  * Processes incoming network messages from the server.
  * Handles different packet types and updates the level state accordingly.
  */
@@ -928,6 +1051,10 @@ static void ProcessNetworkMessages(void) {
             HandleAssignmentPacketMessage(payload, payloadSize);
         } else if (packetType == LEVEL_PACKET_TYPE_FLEET_LAUNCH) {
             HandleFleetLaunchPacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_LOBBY_STATE) {
+            HandleLobbyStatePacketMessage(payload, payloadSize);
+        } else if (packetType == LEVEL_PACKET_TYPE_START_GAME) {
+            HandleStartGamePacketMessage(payload, payloadSize);
         } else if (packetType == LEVEL_PACKET_TYPE_SERVER_DISCONNECT) {
             HandleServerDisconnectPacketMessage(payload, payloadSize);
             break;
@@ -1180,7 +1307,7 @@ static void RenderFrame(float fps) {
         }
     }
 
-    // Don't need the level to be initialized to draw some UI elements.
+    // What we draw depends on the current client stage.
     if (currentStage == CLIENT_STAGE_GAME) {
         // In case we are doing box selection, draw the selection box.
         DrawSelectionBox();
@@ -1202,9 +1329,11 @@ static void RenderFrame(float fps) {
             float textSize = 16.0f;
             DrawScreenText(&openglContext, infoString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textSize / 2, textColor);
         }
+    } else if (currentStage == CLIENT_STAGE_LOBBY) {
+        LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
     } else {
-        // Only true if we are in the login menu stage 
-        // (CLIENT_STAGE_LOGIN_MENU and CLIENT_STAGE_GAME are the only stages supported currently).
+        // Can only reach here if we are in the login menu stage.
+        // as the only other stages are game and lobby.
         LoginMenuUIDraw(&loginMenuUI, &openglContext, openglContext.width, openglContext.height);
     }
 
@@ -1279,8 +1408,15 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // The handling for mouse input depends on the current client stage.
+
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 LoginMenuUIHandleMouseDown(&loginMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
+            if (currentStage == CLIENT_STAGE_LOBBY) {
+                LobbyMenuUIHandleMouseDown(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
 
@@ -1317,8 +1453,15 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // The handling for mouse input depends on the current client stage.
+
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 LoginMenuUIHandleMouseMove(&loginMenuUI, (float)x, (float)y);
+                return 0;
+            }
+
+            if (currentStage == CLIENT_STAGE_LOBBY) {
+                LobbyMenuUIHandleMouseMove(&lobbyMenuUI, (float)x, (float)y);
                 return 0;
             }
 
@@ -1350,8 +1493,15 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // The handling for mouse input depends on the current client stage.
+
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 LoginMenuUIHandleMouseUp(&loginMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
+            if (currentStage == CLIENT_STAGE_LOBBY) {
+                LobbyMenuUIHandleMouseUp(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
 
@@ -1392,8 +1542,9 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // Right mouse button is used to issue move orders to selected planets.
         case WM_RBUTTONDOWN: {
 
-            // Right click does nothing in the menu.
-            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+            // Right mouse button clicks are meaningless outside of the game stage.
+
+            if (currentStage != CLIENT_STAGE_GAME) {
                 return 0;
             }
 
@@ -1428,8 +1579,9 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // Mousewheel movement is for zooming the camera in and out.
         case WM_MOUSEWHEEL: {
             
-            // The mouse wheel currently does nothing in the menu.
-            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+            // Mouse wheel movement is meaningless outside of the game stage.
+
+            if (currentStage != CLIENT_STAGE_GAME) {
                 return 0;
             }
 
@@ -1486,10 +1638,18 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // wParam contains the virtual-key code of the key that was pressed.
         // lParam contains additional information about the key event.
         case WM_KEYDOWN: {
+
+            // The handling for keyboard input depends on the current client stage.
             
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
                 LoginMenuUIHandleKeyDown(&loginMenuUI, wParam, shiftDown);
+                return 0;
+            }
+
+            if (currentStage == CLIENT_STAGE_LOBBY) {
+                bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                LobbyMenuUIHandleKeyDown(&lobbyMenuUI, wParam, shiftDown);
                 return 0;
             }
 
@@ -1554,8 +1714,16 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // according to TranslateMessage.
         // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char
         case WM_CHAR: {
+
+            // The handling for character input depends on the current client stage.
+
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
                 LoginMenuUIHandleChar(&loginMenuUI, (unsigned int)wParam);
+                return 0;
+            }
+
+            if (currentStage == CLIENT_STAGE_LOBBY) {
+                LobbyMenuUIHandleChar(&lobbyMenuUI, (unsigned int)wParam);
                 return 0;
             }
 
@@ -1598,6 +1766,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     // Initialize the login menu UI state so the player can enter connection info.
     LoginMenuUIInitialize(&loginMenuUI);
+
+    // Initialize the lobby menu UI state for read-only viewing.
+    LobbyMenuUIInitialize(&lobbyMenuUI, false);
 
     // Initialize Winsock for networking.
     if (!InitializeWinsock()) {
