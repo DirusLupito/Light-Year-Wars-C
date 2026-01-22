@@ -36,6 +36,32 @@ int64_t GetTickFrequency();
 
 /**
  * Generates a random level with the specified parameters.
+ * Assumes that the level pointed to by 'level' has already been configured,
+ * and the factions in the level have already been created.
+ * @param level A pointer to the Level object to populate.
+ * @param planetCount The number of planets to generate.
+ * @param factionCount The number of factions to generate.
+ *                     Only used to validate that there are enough factions
+ *                     and that each faction can be assigned a starting planet.
+ * @param minFleetCapacity The minimum fleet capacity for generated planets.
+ * @param maxFleetCapacity The maximum fleet capacity for generated planets.
+ * @param width The width of the level.
+ * @param height The height of the level.
+ * @param seed The seed for the random number generator.
+ * @return true if the level was generated successfully, false otherwise.
+ */
+bool GenerateRandomLevel(Level *level,
+    size_t planetCount,
+    size_t factionCount,
+    float minFleetCapacity,
+    float maxFleetCapacity,
+    float width,
+    float height,
+    unsigned int seed);
+
+/**
+ * Generates a random level with the specified parameters.
+ * Assumes that the level pointed to by 'level' has not been configured yet.
  * @param level A pointer to the Level object to populate.
  * @param planetCount The number of planets to generate.
  * @param factionCount The number of factions to generate.
@@ -46,7 +72,7 @@ int64_t GetTickFrequency();
  * @param seed The seed for the random number generator.
  * @return true if the level was generated successfully, false otherwise.
  */
-bool GenerateRandomLevel(Level *level,
+bool GenerateRandomLevelWithFactions(Level *level,
     size_t planetCount,
     size_t factionCount,
     float minFleetCapacity,

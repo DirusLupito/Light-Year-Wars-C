@@ -151,9 +151,14 @@ static Vec2 RandomPlanetPosition(unsigned int *state, float width, float height,
 
 /**
  * Generates a random level with the specified parameters.
+ * Assumes that the level pointed to by 'level' has already been configured,
+ * and the factions in the level have already been created.
  * @param level A pointer to the Level object to populate.
  * @param planetCount The number of planets to generate.
- * @param factionCount The number of factions to generate.
+ * @param factionCount The number of factions to use for generation.
+ *                     Not used to actually generate factions since they are 
+ *                     assumed to already exist; instead, it is used to ensure
+ *                     for validation and to balance starting planet capacities.
  * @param minFleetCapacity The minimum fleet capacity for generated planets.
  * @param maxFleetCapacity The maximum fleet capacity for generated planets.
  * @param width The width of the level.
@@ -191,36 +196,14 @@ bool GenerateRandomLevel(Level *level,
         return false;
     }
 
-    // Used for random number generation.
-    // If seed is zero, we use a default seed for reproducibility.
-    unsigned int state = (seed == 0u) ? 0x12345678u : seed;
-
-    // Configure the level with the required number of factions and planets.
-    // We also allocate an initial capacity for starships.
-    size_t initialShipCapacity = planetCount * 4;
-    if (!LevelConfigure(level, factionCount, planetCount, initialShipCapacity)) {
-        return false;
-    }
-
-    // Now that the level is configured, we can fill in its details.
+    // Now we can fill in the level dimensions and reset starship count.
     level->width = width;
     level->height = height;
     level->starshipCount = 0;
-
-    // Here, we create factions with distinct colors.
-    // We use HSV color space to ensure good color distribution.
-    float baseHue = RandomRange(&state, 0.0f, 360.0f);
-
-    // Distribute hues evenly among factions.
-    float hueStep = 360.0f / (float)factionCount;
-    for (size_t i = 0; i < factionCount; ++i) {
-        // Calculate hue for this faction.
-        float hue = baseHue + hueStep * (float)i;
-        float rgb[3];
-        // Then convert HSV to RGB for actual display and storage.
-        HSVtoRGB(hue, 0.6f, 0.95f, rgb);
-        level->factions[i] = CreateFaction((int)i, rgb[0], rgb[1], rgb[2]);
-    }
+    
+    // Used for random number generation.
+    // If seed is zero, we use a default seed for reproducibility.
+    unsigned int state = (seed == 0u) ? 0x12345678u : seed;
 
     // Now we create planets with random positions and fleet capacities.
     // We try to ensure planets do not overlap by checking distances.
@@ -231,6 +214,14 @@ bool GenerateRandomLevel(Level *level,
         // Create a planet with random fleet capacity within the range [minFleetCapacity, maxFleetCapacity].
         float capacity = RandomRange(&state, minFleetCapacity, maxFleetCapacity);
         Planet planet = CreatePlanet(Vec2Zero(), capacity, NULL);
+
+        // As a balancing step, if this planet is going to be owned by a faction,
+        // we set its capacity to the midpoint of the min and max fleet capacities.
+        // This way, every faction starts with a planet of moderate strength,
+        // equal to all of their peers.
+        if (i < factionCount) {
+            planet.maxFleetCapacity = (minFleetCapacity + maxFleetCapacity) / 2.0f;
+        }
 
         // Attempt to place the planet without overlapping existing planets.
         bool placed = false;
@@ -268,4 +259,93 @@ bool GenerateRandomLevel(Level *level,
     }
 
     return true;
+}
+
+/**
+ * Generates a random level with the specified parameters.
+ * Assumes that the level pointed to by 'level' has not been configured yet.
+ * @param level A pointer to the Level object to populate.
+ * @param planetCount The number of planets to generate.
+ * @param factionCount The number of factions to generate.
+ * @param minFleetCapacity The minimum fleet capacity for generated planets.
+ * @param maxFleetCapacity The maximum fleet capacity for generated planets.
+ * @param width The width of the level.
+ * @param height The height of the level.
+ * @param seed The seed for the random number generator.
+ * @return true if the level was generated successfully, false otherwise.
+ */
+bool GenerateRandomLevelWithFactions(Level *level,
+    size_t planetCount,
+    size_t factionCount,
+    float minFleetCapacity,
+    float maxFleetCapacity,
+    float width,
+    float height,
+    unsigned int seed) {
+
+    // Basic validation of parameters.
+    if (level == NULL) {
+        return false;
+    }
+
+    // We need at least one planet and at least two factions,
+    // but not more factions than planets.
+    if (planetCount == 0 || factionCount < 2 || factionCount > planetCount) {
+        return false;
+    }
+
+    // Fleet capacities must be positive and min must not exceed max.
+    if (minFleetCapacity <= 0.0f || maxFleetCapacity < minFleetCapacity) {
+        return false;
+    }
+
+    // Level dimensions must be positive.
+    if (width <= 0.0f || height <= 0.0f) {
+        return false;
+    }
+
+    // Used for random number generation.
+    // If seed is zero, we use a default seed for reproducibility.
+    unsigned int state = (seed == 0u) ? 0x12345678u : seed;
+
+    // Configure the level with the required number of factions and planets.
+    // We also allocate an initial capacity for starships equal to the maximum
+    // number of ships that could be spawned if all the initial factions
+    // were to launch fleets from all their starting planets at once.
+    // We know that each faction starts with one planet,
+    // and as the code is currently written, each faction's starting planet
+    // has a maximum fleet capacity equal to minFleetCapacity + maxFleetCapacity / 2.
+    // Therefore, the maximum number of ships that could be spawned at once
+    // is factionCount * (minFleetCapacity + maxFleetCapacity) / 2.
+    size_t initialShipCapacity = factionCount * (size_t)((minFleetCapacity + maxFleetCapacity) / 2.0f);
+    if (!LevelConfigure(level, factionCount, planetCount, initialShipCapacity)) {
+        return false;
+    }
+
+    // Here, we create factions with distinct colors.
+    // We use HSV color space to ensure good color distribution.
+    float baseHue = RandomRange(&state, 0.0f, 360.0f);
+
+    // Distribute hues evenly among factions.
+    float hueStep = 360.0f / (float)factionCount;
+    for (size_t i = 0; i < factionCount; ++i) {
+        // Calculate hue for this faction.
+        float hue = baseHue + hueStep * (float)i;
+        float rgb[3];
+        // Then convert HSV to RGB for actual display and storage.
+        HSVtoRGB(hue, 0.6f, 0.95f, rgb);
+        level->factions[i] = CreateFaction((int)i, rgb[0], rgb[1], rgb[2]);
+    }
+
+    // Now we can delegate to GenerateRandomLevel to handle the rest.
+    // Note that we use state as the seed for RNG consistency between
+    // calling this function first vs calling GenerateRandomLevel directly.
+    return GenerateRandomLevel(level,
+        planetCount,
+        factionCount,
+        minFleetCapacity,
+        maxFleetCapacity,
+        width,
+        height,
+        state);
 }

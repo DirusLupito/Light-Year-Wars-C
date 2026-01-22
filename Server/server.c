@@ -79,7 +79,7 @@ static void RebindPlayerFactions(void);
 static void RefreshLobbySlots(void);
 static void BroadcastLobbyStateToAll(void);
 static void SendLobbyStateToPlayerInstance(Player *player);
-static void ProcessLobbyUI(float deltaTime);
+static void ProcessLobbyUI();
 static bool AttemptStartGame(void);
 static int HighestAssignedFactionId(void);
 
@@ -465,10 +465,8 @@ static void SendLobbyStateToPlayerInstance(Player *player) {
 /**
  * Processes the lobby UI input and handles start game requests.
  * Updates lobby settings based on user input and attempts to start the game when requested.
- * @param deltaTime The time elapsed since the last update, in seconds.
  */
-static void ProcessLobbyUI(float deltaTime) {
-    (void)deltaTime;
+static void ProcessLobbyUI(void) {
 
     // Parse the current settings from the lobby UI.
     LobbyMenuGenerationSettings parsed;
@@ -544,6 +542,73 @@ static bool AttemptStartGame(void) {
         return false;
     }
 
+    // We save into a temporary object the level's current factions
+    // so that way we can properly configure the level for generation
+    // without losing the existing faction instances.
+    Faction *existingFactions = NULL;
+    size_t existingFactionCount = level.factionCount;
+    if (existingFactionCount > 0 && level.factions != NULL) {
+        existingFactions = malloc(sizeof(Faction) * existingFactionCount);
+        if (existingFactions != NULL) {
+            for (size_t i = 0; i < existingFactionCount; ++i) {
+                existingFactions[i].id = level.factions[i].id;
+                size_t colorSize = sizeof(level.factions[i].color);
+                memcpy(existingFactions[i].color, level.factions[i].color, colorSize);
+            }
+        }
+    }
+
+    // Debug, check faction colors of the level before reconfiguration.
+    for (size_t i = 0; i < existingFactionCount; ++i) {
+        Faction *faction = &existingFactions[i];
+        printf("Existing Faction %d Color: R=%.2f G=%.2f B=%.2f\n",
+            faction->id, faction->color[0], faction->color[1], faction->color[2]);
+    }
+
+    // Configure the level with the correct planet and starship capacity
+    // (before, it only had the correct faction count).
+
+    // We allocate an initial capacity for starships equal to the maximum
+    // number of ships that could be spawned if all the initial factions
+    // were to launch fleets from all their starting planets at once.
+    // We know that each faction starts with one planet,
+    // and as the code is currently written, each faction's starting planet
+    // has a maximum fleet capacity equal to minFleetCapacity + maxFleetCapacity / 2.
+    // Therefore, the maximum number of ships that could be spawned at once
+    // is factionCount * (minFleetCapacity + maxFleetCapacity) / 2.
+    size_t initialStarshipCapacity = (size_t)parsed.factionCount *
+        (size_t)((parsed.minFleetCapacity + parsed.maxFleetCapacity) / 2.0f);
+    if (!LevelConfigure(&level, (size_t)parsed.factionCount, (size_t)parsed.planetCount, initialStarshipCapacity)) {
+
+        LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Failed to configure level with the provided settings.");
+        if (existingFactions != NULL) {
+            free(existingFactions);
+        }
+
+        return false;
+    }
+
+    // Restore existing faction instances where possible.
+    // We overwrite the id and color of the newly created factions
+    // with those from the existing factions to preserve player assignments.
+    if (existingFactions != NULL) {
+        for (size_t i = 0; i < existingFactionCount; ++i) {
+            Faction *existing = &existingFactions[i];
+            // We assume that the faction count is equal 
+            // to the number of newly created factions.
+            Faction *newFaction = &level.factions[i];
+            newFaction->id = existing->id;
+
+            // Copy color.
+            size_t colorSize = sizeof(existing->color);
+            memcpy(newFaction->color, existing->color, colorSize);
+        }
+
+        // We can now free the temporary storage.
+        free(existingFactions);
+    }
+
+
     // Try to generate the level with the provided settings.
     if (!GenerateRandomLevel(&level,
             (size_t)parsed.planetCount,
@@ -555,6 +620,12 @@ static bool AttemptStartGame(void) {
             parsed.randomSeed)) {
         LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Failed to generate level with the provided settings.");
         return false;
+    }
+
+    for (size_t i = 0; i < level.factionCount; ++i) {
+        Faction *faction = &level.factions[i];
+        printf("Generated Faction %d Color: R=%.2f G=%.2f B=%.2f\n",
+            faction->id, faction->color[0], faction->color[1], faction->color[2]);
     }
 
     // We successfully generated the level, so apply the new settings.
@@ -1546,7 +1617,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             // Update the level state
             LevelUpdate(&level, delta_time);
         } else {
-            ProcessLobbyUI(delta_time);
+            ProcessLobbyUI();
         }
 
         // Update player timeouts with the elapsed time.
