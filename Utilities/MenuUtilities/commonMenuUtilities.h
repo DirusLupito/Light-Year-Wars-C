@@ -72,6 +72,9 @@
 // Fill color of hovered button
 #define MENU_BUTTON_HOVER_FILL_COLOR {0.16f, 0.28f, 0.44f, 0.9f}
 
+// Number of pixels to scroll per mouse wheel step.
+#define SCROLL_PIXELS_PER_WHEEL 64.0f
+
 // Represents a rectangular area for UI layout and hit testing.
 // Coordinates use a top-left origin with positive width and height.
 typedef struct MenuUIRect {

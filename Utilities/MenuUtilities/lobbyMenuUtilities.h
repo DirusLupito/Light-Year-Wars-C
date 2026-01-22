@@ -120,6 +120,7 @@ typedef struct LobbyMenuUIState {
     bool startRequested; /* Latched when the Start Game button is activated. */
     float mouseX;
     float mouseY;
+    float scrollOffset; /* Vertical scroll position for overflowing content. */
     char statusMessage[LOBBY_MENU_STATUS_MAX_LENGTH + 1];
 
     /* Field text buffers and lengths mirror editable inputs. */
@@ -268,6 +269,15 @@ bool LobbyMenuUIConsumeStartRequest(LobbyMenuUIState *state);
  * @param width Current width of the UI area.
  * @param height Current height of the UI area.
  */
-void LobbyMenuUIDraw(const LobbyMenuUIState *state, OpenGLContext *context, int width, int height);
+void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width, int height);
+
+/**
+ * Adjusts the lobby menu scroll position in response to mouse wheel input.
+ * Positive wheel steps scroll the content upward (toward earlier items).
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param height Current height of the UI area.
+ * @param wheelSteps Wheel delta expressed in multiples of WHEEL_DELTA (120).
+ */
+void LobbyMenuUIHandleScroll(LobbyMenuUIState *state, int height, float wheelSteps);
 
 #endif /* _LOBBY_MENU_UTILITIES_H_ */

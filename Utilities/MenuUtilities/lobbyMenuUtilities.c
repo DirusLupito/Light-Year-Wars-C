@@ -45,6 +45,116 @@ static const LobbyMenuValueType kFieldTypes[LOBBY_MENU_FIELD_COUNT] = {
 };
 
 /**
+ * Computes the height of the lobby menu panel based on its contents.
+ * Used for layout and scrolling calculations.
+ * @param state Pointer to the LobbyMenuUIState to evaluate.
+ * @return The computed panel height in pixels.
+ */
+static float LobbyMenuComputePanelHeight(const LobbyMenuUIState *state) {
+    // Validate parameter.
+    if (state == NULL) {
+        return 0.0f;
+    }
+
+    // Field height should just be number of fields times field height plus spacing.
+    float fieldsHeight = (float)LOBBY_MENU_FIELD_COUNT * LOBBY_MENU_FIELD_HEIGHT;
+    if (LOBBY_MENU_FIELD_COUNT > 1) {
+        fieldsHeight += (float)(LOBBY_MENU_FIELD_COUNT - 1) * LOBBY_MENU_FIELD_SPACING;
+    }
+
+    // Likewise, slot height is number of slots times row height plus spacing.
+    float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
+    if (state->slotCount > 1) {
+        slotsHeight += (float)(state->slotCount - 1) * LOBBY_MENU_SLOT_ROW_SPACING;
+    }
+
+    // So the overall height is the sum of all sections plus padding.
+    return LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
+        LOBBY_MENU_BUTTON_HEIGHT + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
+}
+
+/**
+ * Computes the total content height of the lobby menu UI.
+ * Includes panel height and any additional status message space.
+ * @param state Pointer to the LobbyMenuUIState to evaluate.
+ * @return The computed content height in pixels.
+ */
+static float LobbyMenuComputeContentHeight(const LobbyMenuUIState *state) {
+    // We first figure out the height of the main panel.
+    float contentHeight = LobbyMenuComputePanelHeight(state);
+    float statusPadding = MENU_GENERIC_TEXT_HEIGHT;
+
+    // If there's a status message, add space for it.
+    if (state->statusMessage[0] != '\0') {
+        statusPadding += MENU_GENERIC_TEXT_HEIGHT;
+    }
+
+    // Finally, return the total content height (panel + status).
+    return contentHeight + statusPadding;
+}
+
+/**
+ * Computes the base Y position for the lobby menu content
+ * to achieve vertical centering within the viewport.
+ * @param contentHeight The total height of the lobby menu content.
+ * @param viewportHeight The height of the viewport area.
+ * @return The computed base Y position in pixels.
+ */
+static float LobbyMenuComputeBaseY(float contentHeight, float viewportHeight) {
+    // If viewport height is non-positive, just return a default offset.
+    if (viewportHeight <= 0.0f) {
+        return 16.0f;
+    }
+
+    // If content fits within the viewport, center it vertically.
+    if (contentHeight <= viewportHeight) {
+        float centered = (viewportHeight - contentHeight) * 0.5f;
+
+        // And if centering goes too high, clamp to a minimum offset.
+        if (centered < 16.0f) {
+            centered = 16.0f;
+        }
+        return centered;
+    }
+
+    return 16.0f;
+}
+
+/**
+ * Clamps the scroll offset of the lobby menu UI state
+ * to ensure it stays within valid bounds.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param viewportHeight The height of the viewport area.
+ * @return The clamped scroll offset in pixels.
+ */
+static float LobbyMenuClampScroll(LobbyMenuUIState *state, float viewportHeight) {
+    // Nothing to clamp if state is null.
+    if (state == NULL) {
+        return 0.0f;
+    }
+
+    // The maximum scroll offset is content height minus viewport height
+    // (ensuring we don't scroll past the bottom).
+    float maxScroll = LobbyMenuComputeContentHeight(state) - viewportHeight;
+    if (maxScroll < 0.0f) {
+        maxScroll = 0.0f;
+    }
+
+    // Clamp the current scroll offset within [0, maxScroll].
+    float clamped = state->scrollOffset;
+    if (clamped < 0.0f) {
+        clamped = 0.0f;
+    }
+    if (clamped > maxScroll) {
+        clamped = maxScroll;
+    }
+
+    // Update the state with the clamped value.
+    state->scrollOffset = clamped;
+    return clamped;
+}
+
+/**
  * Converts a LobbyMenuFocusTarget to its corresponding field index.
  * @param focus The LobbyMenuFocusTarget to convert.
  * @return The corresponding field index, or -1 if invalid.
@@ -146,6 +256,7 @@ static void ClampWindowDimensions(float *width, float *height) {
 static void ComputeLayout(const LobbyMenuUIState *state,
     int width,
     int height,
+    float scrollOffset,
     MenuUIRect *panelOut,
     MenuUIRect fieldRects[LOBBY_MENU_FIELD_COUNT],
     MenuUIRect *buttonOut,
@@ -191,14 +302,19 @@ static void ComputeLayout(const LobbyMenuUIState *state,
     float panelHeight = LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
         LOBBY_MENU_BUTTON_HEIGHT + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
 
-    // Center the panel within the available area.
-    float panelX = (w - panelWidth) * 0.5f;
-    float panelY = (h - panelHeight) * 0.5f;
 
-    // Ensure panel is not too close to top edge.
-    if (panelY < 16.0f) {
-        panelY = 16.0f;
+    // Compute content height for centering calculations.
+    float contentHeight = panelHeight;
+    if (state->statusMessage[0] != '\0') {
+        contentHeight += MENU_GENERIC_TEXT_HEIGHT;
     }
+    contentHeight += MENU_GENERIC_TEXT_HEIGHT;
+
+    // Compute panel position to center it horizontally
+    // and position it vertically based on scroll offset.
+    float panelX = (w - panelWidth) * 0.5f;
+    float baseY = LobbyMenuComputeBaseY(contentHeight, h);
+    float panelY = baseY - scrollOffset;
 
     // If the pointer we've been given for
     // storing the panel rectangle is non-NULL,
@@ -580,12 +696,14 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     state->mouseX = x;
     state->mouseY = y;
 
+    float scrollOffset = LobbyMenuClampScroll(state, (float)height);
+
     MenuUIRect panel;
     MenuUIRect fields[LOBBY_MENU_FIELD_COUNT];
     MenuUIRect button;
 
     // Figure out where everything is laid out.
-    ComputeLayout(state, width, height, &panel, fields, &button, NULL);
+    ComputeLayout(state, width, height, scrollOffset, &panel, fields, &button, NULL);
 
     // If the click is outside the panel, clear focus and button states.
     if (!MenuUIRectContains(&panel, x, y)) {
@@ -654,10 +772,13 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
         return;
     }
 
+    // We need to ensure that we've not scrolled above the top
+    // or below the bottom of the content.
+    float scrollOffset = LobbyMenuClampScroll(state, (float)height);
     MenuUIRect button;
 
-    // Otherwise, compute layout to find the button rectangle.
-    ComputeLayout(state, width, height, NULL, NULL, &button, NULL);
+    // Compute layout to find the button rectangle.
+    ComputeLayout(state, width, height, scrollOffset, NULL, NULL, &button, NULL);
 
     // Then check if the mouse is still within the button.
     if (MenuUIRectContains(&button, x, y)) {
@@ -668,6 +789,27 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
     // If the mouse winds up outside the button, we don't want it to stay pressed.
     // Meanwhile, if it was inside, we've already marked startRequested.
     state->startButtonPressed = false;
+}
+
+/**
+ * Adjusts the lobby menu scroll position in response to mouse wheel input.
+ * Positive wheel steps scroll the content upward (toward earlier items).
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param height Current height of the UI area.
+ * @param wheelSteps Wheel delta expressed in multiples of WHEEL_DELTA (120).
+ */
+void LobbyMenuUIHandleScroll(LobbyMenuUIState *state, int height, float wheelSteps) {
+    // Validate parameters.
+    if (state == NULL || height <= 0 || wheelSteps == 0.0f) {
+        return;
+    }
+
+    // Adjust scroll offset based on wheel steps and predefined pixels per wheel step.
+    // Positive wheel steps scroll up, so we subtract from the offset.
+    state->scrollOffset -= wheelSteps * SCROLL_PIXELS_PER_WHEEL;
+
+    // Ensure scroll offset is clamped within valid bounds.
+    LobbyMenuClampScroll(state, (float)height);
 }
 
 /**
@@ -808,11 +950,14 @@ bool LobbyMenuUIConsumeStartRequest(LobbyMenuUIState *state) {
  * @param width Current width of the UI area.
  * @param height Current height of the UI area.
  */
-void LobbyMenuUIDraw(const LobbyMenuUIState *state, OpenGLContext *context, int width, int height) {
+void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width, int height) {
     // Validate parameters.
     if (state == NULL || context == NULL || width <= 0 || height <= 0) {
         return;
     }
+
+    // Ensure valid scroll offset.
+    float scrollOffset = LobbyMenuClampScroll(state, (float)height);
 
     MenuUIRect panel;
     MenuUIRect fields[LOBBY_MENU_FIELD_COUNT];
@@ -820,7 +965,7 @@ void LobbyMenuUIDraw(const LobbyMenuUIState *state, OpenGLContext *context, int 
     MenuUIRect slotArea;
 
     // Figure out where everything is laid out.
-    ComputeLayout(state, width, height, &panel, fields, &button, &slotArea);
+    ComputeLayout(state, width, height, scrollOffset, &panel, fields, &button, &slotArea);
 
     // Draw the main panel background.
     float panelOutline[4] = MENU_PANEL_OUTLINE_COLOR;

@@ -66,6 +66,7 @@ typedef struct LoginMenuUIState {
     bool connectButtonPressed;
     float mouseX;
     float mouseY;
+    float scrollOffset; /* Vertical scroll position for overflowing content. */
     char statusMessage[LOGIN_MENU_STATUS_MAX_LENGTH + 1];
 } LoginMenuUIState;
 
@@ -150,5 +151,15 @@ void LoginMenuUISetStatusMessage(LoginMenuUIState *state, const char *message);
  * @param height The height of the window.
  */
 void LoginMenuUIDraw(LoginMenuUIState *state, OpenGLContext *context, int width, int height);
+
+/**
+ * Adjusts the login menu scroll position in response to mouse wheel input.
+ * Positive wheel steps scroll the content upward (toward earlier items).
+ * @param state Pointer to the LoginMenuUIState.
+ * @param width The width of the window.
+ * @param height The height of the window.
+ * @param wheelSteps Wheel delta expressed in multiples of WHEEL_DELTA (120).
+ */
+void LoginMenuUIHandleScroll(LoginMenuUIState *state, int height, float wheelSteps);
 
 #endif // _LOGIN_MENU_UTILITIES_H_

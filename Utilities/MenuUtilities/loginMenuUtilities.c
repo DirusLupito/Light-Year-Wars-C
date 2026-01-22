@@ -8,6 +8,94 @@
 #include "Utilities/MenuUtilities/loginMenuUtilities.h"
 
 /**
+ * Computes the fixed height of the login menu panel.
+ * @return The computed panel height in pixels.
+ */
+static float LoginMenuPanelHeight(void) {
+    // The login menu is just two fields plus button plus padding.
+    return 2.0f * (LOGIN_MENU_FIELD_HEIGHT + LOGIN_MENU_FIELD_SPACING) +
+        LOGIN_MENU_BUTTON_HEIGHT + 2.0f * LOGIN_MENU_PANEL_PADDING;
+}
+
+/**
+ * Computes the total content height of the login menu UI.
+ * Includes panel height and any additional status message space.
+ * @param state Pointer to the LoginMenuUIState to evaluate.
+ * @return The computed content height in pixels.
+ */
+static float LoginMenuContentHeight(const LoginMenuUIState *state) {
+    // Get the panel height first.
+    float height = LoginMenuPanelHeight();
+
+    // Then add the padding for status message if present.
+    float statusPadding = MENU_GENERIC_TEXT_HEIGHT;
+    if (state != NULL && state->statusMessage[0] != '\0') {
+        statusPadding += MENU_GENERIC_TEXT_HEIGHT;
+    }
+    return height + statusPadding;
+}
+
+/**
+ * Computes the base Y position for the login menu panel
+ * to center it vertically within the viewport if possible.
+ * @param contentHeight The total content height of the login menu UI.
+ * @param viewportHeight The height of the viewport.
+ * @return The computed base Y position in pixels.
+ */
+static float LoginMenuBaseY(float contentHeight, float viewportHeight) {
+    // If viewport height is non-positive, just return a default offset.
+    if (viewportHeight <= 0.0f) {
+        return 16.0f;
+    }
+
+    // If content fits within the viewport, center it vertically.
+    if (contentHeight <= viewportHeight) {
+        float centered = (viewportHeight - contentHeight) * 0.5f;
+        // Clamp to the default minimum offset.
+        if (centered < 16.0f) {
+            centered = 16.0f;
+        }
+        return centered;
+    }
+
+    return 16.0f;
+}
+
+/**
+ * Clamps the scroll offset of the login menu UI state
+ * to ensure it stays within valid bounds.
+ * @param state Pointer to the LoginMenuUIState to modify.
+ * @param viewportHeight The height of the viewport area.
+ * @return The clamped scroll offset in pixels.
+ */
+static float LoginMenuClampScroll(LoginMenuUIState *state, float viewportHeight) {
+    // Nothing to clamp
+    if (state == NULL) {
+        return 0.0f;
+    }
+
+    // The maximum scroll offset is content height minus viewport height
+    // (ensuring we don't scroll past the bottom).
+    float maxScroll = LoginMenuContentHeight(state) - viewportHeight;
+    if (maxScroll < 0.0f) {
+        maxScroll = 0.0f;
+    }
+
+    // Clamp the current scroll offset within [0, maxScroll].
+    float clamped = state->scrollOffset;
+    if (clamped < 0.0f) {
+        clamped = 0.0f;
+    }
+    if (clamped > maxScroll) {
+        clamped = maxScroll;
+    }
+
+    // Update the state with the clamped value.
+    state->scrollOffset = clamped;
+    return clamped;
+}
+
+/**
  * Helper function to compute the layout of the login menu UI elements
  * based on the current window size. Will seek to center the elements
  * and size them appropriately.
@@ -18,7 +106,14 @@
  * @param portField Output parameter for the port field rectangle.
  * @param button Output parameter for the connect button rectangle.
  */
-static void LoginMenuUIComputeLayout(int width, int height, MenuUIRect *panel, MenuUIRect *ipField, MenuUIRect *portField, MenuUIRect *button) {
+static void LoginMenuUIComputeLayout(const LoginMenuUIState *state,
+    int width,
+    int height,
+    float scrollOffset,
+    MenuUIRect *panel,
+    MenuUIRect *ipField,
+    MenuUIRect *portField,
+    MenuUIRect *button) {
     // We try to ensure width and height are at least 1.0f
     // to avoid weirdness with very small windows or zero division, etc.
     float w = (float)width;
@@ -42,9 +137,14 @@ static void LoginMenuUIComputeLayout(int width, int height, MenuUIRect *panel, M
     // Compute button width based on field width.
     float buttonWidth = fminf(fieldWidth, 240.0f);
 
+    // Compute total content height.
+    float contentHeight = LoginMenuContentHeight(state);
+
     // Compute positions to center the elements.
     float centerX = w * 0.5f;
-    float startY = h * 0.5f - LOGIN_MENU_FIELD_HEIGHT - LOGIN_MENU_FIELD_SPACING;
+    float baseY = LoginMenuBaseY(contentHeight, h);
+    float panelTop = baseY - scrollOffset;
+    float startY = panelTop + LOGIN_MENU_PANEL_PADDING;
 
     // Output the rectangles if requested.
     if (ipField != NULL) {
@@ -186,12 +286,15 @@ void LoginMenuUIHandleMouseDown(LoginMenuUIState *state, float x, float y, int w
     state->mouseX = x;
     state->mouseY = y;
 
+    // Ensure scroll offset is within the proper bounds.
+    float scrollOffset = LoginMenuClampScroll(state, (float)height);
+
     // Compute the layout to determine element positions.
     MenuUIRect panel;
     MenuUIRect ipField;
     MenuUIRect portField;
     MenuUIRect button;
-    LoginMenuUIComputeLayout(width, height, &panel, &ipField, &portField, &button);
+    LoginMenuUIComputeLayout(state, width, height, scrollOffset, &panel, &ipField, &portField, &button);
 
     // Now that we know the element positions,
     // we can update focus and button states
@@ -230,9 +333,12 @@ void LoginMenuUIHandleMouseUp(LoginMenuUIState *state, float x, float y, int wid
     state->mouseX = x;
     state->mouseY = y;
 
+    // Ensure scroll offset is within the proper bounds.
+    float scrollOffset = LoginMenuClampScroll(state, (float)height);
+
     // Only the button matters on mouse up.
     MenuUIRect button;
-    LoginMenuUIComputeLayout(width, height, NULL, NULL, NULL, &button);
+    LoginMenuUIComputeLayout(state, width, height, scrollOffset, NULL, NULL, NULL, &button);
 
     // If the button was pressed and the mouse is still over it,
     // we register a connect request.
@@ -242,6 +348,25 @@ void LoginMenuUIHandleMouseUp(LoginMenuUIState *state, float x, float y, int wid
     if (wasPressed && MenuUIRectContains(&button, x, y)) {
         state->connectRequested = true;
     }
+}
+
+/**
+ * Adjusts the login menu scroll position in response to mouse wheel input.
+ * Positive wheel steps scroll the content upward (toward earlier items).
+ * @param state Pointer to the LoginMenuUIState.
+ * @param height The height of the window.
+ * @param wheelSteps Wheel delta expressed in multiples of WHEEL_DELTA (120).
+ */
+void LoginMenuUIHandleScroll(LoginMenuUIState *state, int height, float wheelSteps) {
+    // If state is null, we can't update anything.
+    if (state == NULL || height <= 0 || wheelSteps == 0.0f) {
+        return;
+    }
+
+    // Adjust scroll offset based on wheel steps,
+    // then ensure it's clamped within valid bounds.
+    state->scrollOffset -= wheelSteps * SCROLL_PIXELS_PER_WHEEL;
+    LoginMenuClampScroll(state, (float)height);
 }
 
 /**
@@ -401,12 +526,15 @@ void LoginMenuUIDraw(LoginMenuUIState *state, OpenGLContext *context, int width,
         return;
     }
 
+    // Ensure scroll offset is within the proper bounds.
+    float scrollOffset = LoginMenuClampScroll(state, (float)height);
+
     // We retrieve rectangles for all UI elements.
     MenuUIRect panel;
     MenuUIRect ipField;
     MenuUIRect portField;
     MenuUIRect button;
-    LoginMenuUIComputeLayout(width, height, &panel, &ipField, &portField, &button);
+    LoginMenuUIComputeLayout(state, width, height, scrollOffset, &panel, &ipField, &portField, &button);
 
     // Draw the panel background as a semi-transparent, outlined rectangle.
 

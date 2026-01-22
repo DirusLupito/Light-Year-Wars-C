@@ -1576,10 +1576,34 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             return 0;
         }
 
-        // Mousewheel movement is for zooming the camera in and out.
+        // Mousewheel movement is for zooming the camera in and out in the game stage,
+        // and for scrolling the menu UI in menu stages.
         case WM_MOUSEWHEEL: {
-            
-            // Mouse wheel movement is meaningless outside of the game stage.
+            // The wheel delta indicates the amount and direction of wheel movement.
+            // A positive value indicates forward movement (away from the user),
+            // while a negative value indicates backward movement (towards the user).
+            // In typical RTS games, zooming out is done by scrolling the wheel backward (towards the user),
+            // and zooming in is done by scrolling the wheel forward (away from the user).
+            int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+            if (wheelDelta == 0) {
+                return 0;
+            }
+
+            // Calculate the number of wheel steps (notches) moved.
+            // We use steps rather than the pure delta value
+            // because the delta can vary depending on the mouse settings.
+            float wheelSteps = (float)wheelDelta / (float)WHEEL_DELTA;
+
+            // The mouse scrolls up/down to scroll the lobby menu up/down.
+            if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
+                LoginMenuUIHandleScroll(&loginMenuUI, openglContext.height, wheelSteps);
+                return 0;
+            }
+
+            if (currentStage == CLIENT_STAGE_LOBBY) {
+                LobbyMenuUIHandleScroll(&lobbyMenuUI, openglContext.height, wheelSteps);
+                return 0;
+            }
 
             if (currentStage != CLIENT_STAGE_GAME) {
                 return 0;
@@ -1587,18 +1611,6 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
             // Nothing to zoom if no level is initialized.
             if (!levelInitialized) {
-                return 0;
-            }
-
-            // The wheel delta indicates the amount and direction of wheel movement.
-            // A positive value indicates forward movement (away from the user),
-            // while a negative value indicates backward movement (towards the user).
-            // In typical RTS games, zooming out is done by scrolling the wheel backward (towards the user),
-            // and zooming in is done by scrolling the wheel forward (away from the user).
-            int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
-
-            // No zoom change if there is no wheel movement.
-            if (wheelDelta == 0) {
                 return 0;
             }
 

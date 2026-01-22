@@ -733,8 +733,15 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
                 return 0;
             }
 
-            // No zooming allowed in the lobby stage.
+            
+            // Calculate the number of wheel steps (notches) moved.
+            // We use steps rather than the pure delta value
+            // because the delta can vary depending on the mouse settings.
+            float wheelSteps = (float)wheelDelta / (float)WHEEL_DELTA;
+
+            // The mouse scrolls up/down to scroll the lobby menu up/down.
             if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIHandleScroll(&lobbyMenuUI, openglContext.height, wheelSteps);
                 return 0;
             }
 
@@ -1622,7 +1629,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 }
             }
 
+            // We only need to draw the lobby UI if we are in the lobby stage.
+            if (currentStage == SERVER_STAGE_LOBBY) {
+                LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
+            }
+
             // Display FPS in the top-left corner
+            // We draw this after all other rendering to ensure it's visible on top.
 
             int textPositionFromTop = 20;
             int textPositionFromLeft = 10;
@@ -1634,11 +1647,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 float textColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
                 float textSize = 16.0f;
                 DrawScreenText(&openglContext, fpsString, (float)textPositionFromLeft, (float)textPositionFromTop, textSize, textSize / 2, textColor);
-            }
-
-            // We only need to draw the lobby UI if we are in the lobby stage.
-            if (currentStage == SERVER_STAGE_LOBBY) {
-                LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
             }
 
             // Swap the front and back buffers to display the rendered frame.
