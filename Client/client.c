@@ -136,6 +136,7 @@ static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
 static void SendJoinRequest(void);
 static void SendDisconnectNotice(void);
+static void SendLobbyColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b);
 static void ProcessMenuConnectRequest(void);
 static void RenderFrame(float fps);
 static void DrawSelectionBox(void);
@@ -734,6 +735,9 @@ static void HandleAssignmentPacketMessage(const uint8_t *data, size_t length) {
     // Update the lobby UI to highlight the assigned faction slot,
     // since it's our slot and we want to know where we are.
     LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, assignedFactionId);
+
+    // Update the lobby UI to enable color editing for our assigned faction.
+    LobbyMenuUISetColorEditAuthority(&lobbyMenuUI, false, assignedFactionId);
 }
 
 /**
@@ -917,10 +921,13 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
     for (size_t i = 0; i < slotCount; ++i) {
         bool occupied = slots[i].occupied != 0u;
         LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, slots[i].factionId, occupied);
+        LobbyMenuUISetSlotColor(&lobbyMenuUI, i, slots[i].color);
     }
 
-    // Highlight our assigned faction slot and update status message.
+    // Highlight our assigned faction slot and update status message,
+    // and enable color editing for our assigned faction.
     LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, assignedFactionId);
+    LobbyMenuUISetColorEditAuthority(&lobbyMenuUI, false, assignedFactionId);
     LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Waiting for host to start game.");
 
     // If we are not already in the lobby stage, switch to it.
@@ -1127,6 +1134,37 @@ static void SendDisconnectNotice(void) {
     // Report any send errors.
     if (result == SOCKET_ERROR) {
         printf("disconnect notice sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Sends a lobby color update to the server for the specified faction.
+ * @param factionId The faction ID whose color is being updated.
+ * @param r Red channel (0-255).
+ * @param g Green channel (0-255).
+ * @param b Blue channel (0-255).
+ */
+static void SendLobbyColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b) {
+    if (!serverAddressValid || clientSocket == INVALID_SOCKET) {
+        return;
+    }
+
+    LevelLobbyColorPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_LOBBY_COLOR;
+    packet.factionId = factionId;
+    packet.r = r;
+    packet.g = g;
+    packet.b = b;
+
+    int result = sendto(clientSocket,
+        (const char *)&packet,
+        (int)sizeof(packet),
+        0,
+        (struct sockaddr *)&serverAddress,
+        (int)sizeof(serverAddress));
+
+    if (result == SOCKET_ERROR) {
+        printf("lobby color sendto failed: %d\n", WSAGetLastError());
     }
 }
 
@@ -1884,6 +1922,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
         // Process any incoming network messages from the server.
         ProcessNetworkMessages();
+
+        // Send any committed lobby color updates.
+        if (currentStage == CLIENT_STAGE_LOBBY) {
+            int factionId = -1;
+            uint8_t r = 0, g = 0, b = 0;
+            if (LobbyMenuUIConsumeColorCommit(&lobbyMenuUI, &factionId, &r, &g, &b)) {
+                if (factionId == assignedFactionId) {
+                    SendLobbyColorUpdate(factionId, r, g, b);
+                }
+            }
+        }
 
         // Calculate delta time since the last frame.
         int64_t currentTicks = GetTicks();

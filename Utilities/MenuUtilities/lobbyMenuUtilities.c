@@ -68,6 +68,11 @@ static float LobbyMenuComputePanelHeight(const LobbyMenuUIState *state) {
         slotsHeight += (float)(state->slotCount - 1) * LOBBY_MENU_SLOT_ROW_SPACING;
     }
 
+    // Add extra space if a color picker dropdown is open.
+    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+        slotsHeight += ColorPickerUIHeight();
+    }
+
     // So the overall height is the sum of all sections plus padding.
     return LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
         LOBBY_MENU_BUTTON_HEIGHT + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
@@ -288,6 +293,7 @@ static void ComputeLayout(const LobbyMenuUIState *state,
     // The overall height is:
     //   top padding + fields height + button section spacing +
     //   button height + section spacing + slots height + bottom padding
+    //   + any color picker height if open.
 
     float fieldsHeight = (float)LOBBY_MENU_FIELD_COUNT * LOBBY_MENU_FIELD_HEIGHT;
     if (LOBBY_MENU_FIELD_COUNT > 1) {
@@ -297,6 +303,10 @@ static void ComputeLayout(const LobbyMenuUIState *state,
     float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
     if (state->slotCount > 1) {
         slotsHeight += (float)(state->slotCount - 1) * LOBBY_MENU_SLOT_ROW_SPACING;
+    }
+
+    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+        slotsHeight += ColorPickerUIHeight();
     }
 
     float panelHeight = LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
@@ -404,6 +414,17 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
     state->editable = editable;
     state->focus = LOBBY_MENU_FOCUS_NONE;
     state->highlightedFactionId = -1;
+
+    // Reset picker state so there is no stale interaction or pending commits.
+    ColorPickerUIInitialize(&state->colorPicker);
+
+    for (size_t i = 0; i < LOBBY_MENU_MAX_SLOTS; ++i) {
+        state->slotColors[i][0] = 1.0f;
+        state->slotColors[i][1] = 1.0f;
+        state->slotColors[i][2] = 1.0f;
+        state->slotColors[i][3] = 1.0f;
+        state->slotColorValid[i] = false;
+    }
 }
 
 /**
@@ -572,6 +593,7 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount) {
     for (size_t i = slotCount; i < LOBBY_MENU_MAX_SLOTS; ++i) {
         state->slotFactionIds[i] = -1;
         state->slotOccupied[i] = false;
+        state->slotColorValid[i] = false;
     }
 
     // Update the slot count.
@@ -606,6 +628,25 @@ void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId
 }
 
 /**
+ * Sets the display color for a specific lobby slot.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param color RGBA color in 0-1 range.
+ */
+void LobbyMenuUISetSlotColor(LobbyMenuUIState *state, size_t index, const float color[4]) {
+    if (state == NULL || color == NULL || index >= LOBBY_MENU_MAX_SLOTS) {
+        return;
+    }
+
+    // Update the slot color, clamping each component to [0, 1].
+    state->slotColors[index][0] = ColorPickerClamp01(color[0]);
+    state->slotColors[index][1] = ColorPickerClamp01(color[1]);
+    state->slotColors[index][2] = ColorPickerClamp01(color[2]);
+    state->slotColors[index][3] = ColorPickerClamp01(color[3]);
+    state->slotColorValid[index] = true;
+}
+
+/**
  * Sets the highlighted faction ID in the lobby UI.
  * Used to visually distinguish a specific slot (e.g. local player).
  * @param state Pointer to the LobbyMenuUIState to modify.
@@ -618,6 +659,20 @@ void LobbyMenuUISetHighlightedFactionId(LobbyMenuUIState *state, int factionId) 
     }
 
     state->highlightedFactionId = factionId;
+}
+
+/**
+ * Configures which faction colors the local user is allowed to edit.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param allowAll True to allow editing any slot color (server).
+ * @param factionId Faction ID allowed to edit when allowAll is false (client).
+ */
+void LobbyMenuUISetColorEditAuthority(LobbyMenuUIState *state, bool allowAll, int factionId) {
+    if (state == NULL) {
+        return;
+    }
+
+    ColorPickerUISetEditAuthority(&state->colorPicker, allowAll, factionId);
 }
 
 /**
@@ -636,6 +691,7 @@ void LobbyMenuUIClearSlots(LobbyMenuUIState *state) {
     for (size_t i = 0; i < LOBBY_MENU_MAX_SLOTS; ++i) {
         state->slotFactionIds[i] = -1;
         state->slotOccupied[i] = false;
+        state->slotColorValid[i] = false;
     }
 }
 
@@ -676,6 +732,22 @@ void LobbyMenuUIHandleMouseMove(LobbyMenuUIState *state, float x, float y) {
 
     state->mouseX = x;
     state->mouseY = y;
+
+    // If the color picker is open and dragging, update the color.
+    // Otherwise, nothing more to do beyond updating mouse position.
+    if (!state->colorPicker.open || !state->colorPicker.dragging || state->colorPicker.slotIndex < 0) {
+        return;
+    }
+
+    int slotIndex = state->colorPicker.slotIndex;
+    if (slotIndex >= 0 && slotIndex < (int)state->slotCount) {
+        bool dirty = false;
+        ColorPickerUIUpdateDrag(&state->colorPicker, x, state->slotColors[slotIndex], &dirty);
+        if (dirty) {
+            state->slotColorValid[slotIndex] = true;
+            state->colorPicker.dirty = true;
+        }
+    }
 }
 
 /**
@@ -701,9 +773,116 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     MenuUIRect panel;
     MenuUIRect fields[LOBBY_MENU_FIELD_COUNT];
     MenuUIRect button;
+    MenuUIRect slotArea;
 
     // Figure out where everything is laid out.
-    ComputeLayout(state, width, height, scrollOffset, &panel, fields, &button, NULL);
+    ComputeLayout(state, width, height, scrollOffset, &panel, fields, &button, &slotArea);
+
+    // Handle color picker interactions first (independent of editability).
+    bool clickedColorUI = false;
+    bool colorActionHandled = false;
+
+    if (state->slotCount > 0) {
+        float rowY = slotArea.y;
+
+        // For each slot, check if the color swatch or picker was clicked.
+        for (size_t i = 0; i < state->slotCount; ++i) {
+            int factionId = state->slotFactionIds[i];
+
+            // Figure out the swatch rectangle for this slot.
+            float swatchX = slotArea.x + slotArea.width - COLOR_PICKER_SWATCH_PADDING - COLOR_PICKER_SWATCH_SIZE;
+            float swatchY = rowY + (LOBBY_MENU_SLOT_ROW_HEIGHT - COLOR_PICKER_SWATCH_SIZE) * 0.5f;
+            MenuUIRect swatchRect = MenuUIRectMake(swatchX, swatchY, COLOR_PICKER_SWATCH_SIZE, COLOR_PICKER_SWATCH_SIZE);
+
+            // If the swatch was clicked, handle opening/closing the color picker.
+            if (MenuUIRectContains(&swatchRect, x, y)) {
+                bool canEdit = ColorPickerUICanEdit(&state->colorPicker, factionId);
+
+                // If editable, toggle the color picker for this slot.
+                if (canEdit) {
+                    clickedColorUI = true;
+                    // If the picker is already open for this slot, close it.
+                    if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+                        ColorPickerUIClose(&state->colorPicker, true, state->slotColors[i], factionId);
+                    } else {
+                        // If another slot's picker is open, close it first.
+                        if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+                            int openFactionId = state->slotFactionIds[state->colorPicker.slotIndex];
+                            ColorPickerUIClose(&state->colorPicker, true, state->slotColors[state->colorPicker.slotIndex], openFactionId);
+                        }
+                        ColorPickerUIOpen(&state->colorPicker, (int)i);
+                    }
+                    colorActionHandled = true;
+                }
+
+                // If not editable, just note that the color UI was clicked.
+                if (!canEdit && state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+                    clickedColorUI = true;
+                }
+                break;
+            }
+
+            // If the color picker is open for this slot, check if a slider was clicked.
+            if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+                float pickerY = rowY + LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+                MenuUIRect pickerRect = MenuUIRectMake(slotArea.x, pickerY, slotArea.width, ColorPickerUIHeight());
+
+                // Check if the click is within the picker area.
+                if (MenuUIRectContains(&pickerRect, x, y)) {
+                    clickedColorUI = true;
+
+                    float sliderX = pickerRect.x + COLOR_PICKER_PANEL_PADDING + COLOR_PICKER_SLIDER_LABEL_WIDTH;
+                    float sliderWidth = pickerRect.width - (COLOR_PICKER_PANEL_PADDING * 2.0f) - COLOR_PICKER_SLIDER_LABEL_WIDTH;
+
+                    // For each color channel, check if its slider was clicked.
+                    for (int channel = 0; channel < 3; ++channel) {
+                        float sliderY = pickerRect.y + COLOR_PICKER_PANEL_PADDING + channel * (COLOR_PICKER_SLIDER_HEIGHT + COLOR_PICKER_SLIDER_SPACING);
+                        MenuUIRect sliderRect = MenuUIRectMake(sliderX, sliderY, sliderWidth, COLOR_PICKER_SLIDER_HEIGHT);
+
+                        // If this slider was clicked, start dragging.
+                        if (MenuUIRectContains(&sliderRect, x, y)) {
+                            float t = (x - sliderX) / sliderWidth;
+                            t = ColorPickerClamp01(t);
+                            state->slotColors[i][channel] = t;
+                            state->slotColors[i][3] = 1.0f;
+                            state->slotColorValid[i] = true;
+                            state->colorPicker.dirty = true;
+                            ColorPickerUIBeginDrag(&state->colorPicker, channel, sliderX, sliderWidth);
+                            colorActionHandled = true;
+                            break;
+                        }
+                    }
+
+                    break;
+                }
+            }
+
+            // Advance to the next slot row.
+            rowY += LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+            if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+                rowY += ColorPickerUIHeight();
+            }
+        }
+    }
+
+    // If the color picker is open but no color UI was clicked, close it.
+    if (state->colorPicker.open && !clickedColorUI) {
+        int openSlot = state->colorPicker.slotIndex;
+
+        // Close the picker, committing the color if valid.
+        if (openSlot >= 0 && openSlot < (int)state->slotCount) {
+            int openFactionId = state->slotFactionIds[openSlot];
+            ColorPickerUIClose(&state->colorPicker, true, state->slotColors[openSlot], openFactionId);
+        } else {
+            // Out of range slot, just close without committing.
+            ColorPickerUIClose(&state->colorPicker, false, NULL, -1);
+        }
+    }
+
+    // If a color action was handled or the color UI was clicked, we're done.
+    if (colorActionHandled || clickedColorUI) {
+        return;
+    }
 
     // If the click is outside the panel, clear focus and button states.
     if (!MenuUIRectContains(&panel, x, y)) {
@@ -760,6 +939,9 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
     state->mouseX = x;
     state->mouseY = y;
 
+    // Stop any color slider dragging.
+    ColorPickerUIEndDrag(&state->colorPicker);
+
     // If not editable, ignore any button presses.
     if (!state->editable) {
         state->startButtonPressed = false;
@@ -789,6 +971,11 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
     // If the mouse winds up outside the button, we don't want it to stay pressed.
     // Meanwhile, if it was inside, we've already marked startRequested.
     state->startButtonPressed = false;
+
+    // We also need to ensure scroll offset is clamped
+    // here because mouse up may have caused changes
+    // to the UI that affect layout, such as closing the color picker.
+    LobbyMenuClampScroll(state, (float)height);
 }
 
 /**
@@ -943,6 +1130,19 @@ bool LobbyMenuUIConsumeStartRequest(LobbyMenuUIState *state) {
 }
 
 /**
+ * Consumes a committed color change from the lobby UI.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outFactionId Output faction ID whose color changed.
+ * @param outR Output red channel (0-255).
+ * @param outG Output green channel (0-255).
+ * @param outB Output blue channel (0-255).
+ * @return True if a color change was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeColorCommit(LobbyMenuUIState *state, int *outFactionId, uint8_t *outR, uint8_t *outG, uint8_t *outB) {
+    return ColorPickerUIConsumeCommit(&state->colorPicker, outFactionId, outR, outG, outB);
+}
+
+/**
  * Renders the lobby menu UI using OpenGL.
  * Draws panels, input fields, buttons, and status messages.
  * @param state Pointer to the LobbyMenuUIState to render.
@@ -1069,6 +1269,78 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
         // Draw the slot line text centered vertically within the row.
         float textY = rowY + (LOBBY_MENU_SLOT_ROW_HEIGHT / 2.0f) + (MENU_GENERIC_TEXT_HEIGHT / 2.0f);
         DrawScreenText(context, line, slotArea.x, textY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
+
+        // Draw the color swatch to the right side of the slot row.
+        float swatchX = slotArea.x + slotArea.width - COLOR_PICKER_SWATCH_PADDING - COLOR_PICKER_SWATCH_SIZE;
+        float swatchY = rowY + (LOBBY_MENU_SLOT_ROW_HEIGHT - COLOR_PICKER_SWATCH_SIZE) * 0.5f;
+        float swatchOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+        float swatchFill[4] = {0.2f, 0.2f, 0.2f, 0.9f};
+        if (state->slotColorValid[i]) {
+            swatchFill[0] = state->slotColors[i][0];
+            swatchFill[1] = state->slotColors[i][1];
+            swatchFill[2] = state->slotColors[i][2];
+            swatchFill[3] = 0.95f;
+        }
+        DrawOutlinedRectangle(swatchX, swatchY, swatchX + COLOR_PICKER_SWATCH_SIZE,
+            swatchY + COLOR_PICKER_SWATCH_SIZE, swatchOutline, swatchFill);
+
+        // Draw the color picker dropdown if this slot is active.
+        if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+            float pickerY = rowY + LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+            MenuUIRect pickerRect = MenuUIRectMake(slotArea.x, pickerY, slotArea.width, ColorPickerUIHeight());
+
+            float pickerOutline[4] = MENU_PANEL_OUTLINE_COLOR;
+            float pickerFill[4] = MENU_PANEL_FILL_COLOR;
+            DrawOutlinedRectangle(pickerRect.x, pickerRect.y, pickerRect.x + pickerRect.width,
+                pickerRect.y + pickerRect.height, pickerOutline, pickerFill);
+
+            const char *labels[3] = {"R", "G", "B"};
+            float sliderX = pickerRect.x + COLOR_PICKER_PANEL_PADDING + COLOR_PICKER_SLIDER_LABEL_WIDTH;
+            float sliderWidth = pickerRect.width - (COLOR_PICKER_PANEL_PADDING * 2.0f) - COLOR_PICKER_SLIDER_LABEL_WIDTH;
+
+            // For each color channel, draw its slider.
+            for (int channel = 0; channel < 3; ++channel) {
+                float sliderY = pickerRect.y + COLOR_PICKER_PANEL_PADDING + channel * (COLOR_PICKER_SLIDER_HEIGHT + COLOR_PICKER_SLIDER_SPACING);
+                MenuUIRect sliderRect = MenuUIRectMake(sliderX, sliderY, sliderWidth, COLOR_PICKER_SLIDER_HEIGHT);
+
+                float sliderOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+                float sliderFill[4] = MENU_INPUT_BOX_FILL_COLOR;
+                DrawOutlinedRectangle(sliderRect.x, sliderRect.y, sliderRect.x + sliderRect.width,
+                    sliderRect.y + sliderRect.height, sliderOutline, sliderFill);
+
+                // The default fill color depends on the channel.
+                float fillColor[4] = {0.4f, 0.4f, 0.4f, 0.9f};
+
+                // Channel 0, which is red has a reddish fill.
+                // Channel 1 (green) is greenish, and channel 2 (blue) is blueish.
+                if (channel == 0) {
+                    fillColor[0] = 0.95f; fillColor[1] = 0.2f; fillColor[2] = 0.2f;
+                } else if (channel == 1) {
+                    fillColor[0] = 0.2f; fillColor[1] = 0.95f; fillColor[2] = 0.2f;
+                } else {
+                    fillColor[0] = 0.2f; fillColor[1] = 0.4f; fillColor[2] = 0.95f;
+                }
+
+                // Draw the filled portion of the slider based on the current color value.
+                float value = ColorPickerClamp01(state->slotColors[i][channel]);
+                float filledWidth = sliderRect.width * value;
+                if (filledWidth > 1.0f) {
+                    float fillOutline[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    DrawOutlinedRectangle(sliderRect.x, sliderRect.y,
+                        sliderRect.x + filledWidth, sliderRect.y + sliderRect.height,
+                        fillOutline, fillColor);
+                }
+
+                // Figure out and then draw the channel label to the left of the slider.
+
+                float labelX = pickerRect.x + COLOR_PICKER_PANEL_PADDING;
+                float labelY = sliderRect.y + sliderRect.height + (MENU_GENERIC_TEXT_HEIGHT * 0.2f);
+                DrawScreenText(context, labels[channel], labelX, labelY,
+                    MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, labelColor);
+            }
+
+            rowY += ColorPickerUIHeight();
+        }
 
         rowY += LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
     }

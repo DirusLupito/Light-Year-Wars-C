@@ -21,6 +21,7 @@
 #include "Utilities/renderUtilities.h"
 #include "Utilities/openglUtilities.h"
 #include "Utilities/MenuUtilities/commonMenuUtilities.h"
+#include "Utilities/MenuUtilities/colorPickerUtilities.h"
 
 // Maximum number of player slots in the lobby.
 #define LOBBY_MENU_MAX_SLOTS 16
@@ -69,6 +70,7 @@
 
 // Spacing between slot rows in the lobby menu.
 #define LOBBY_MENU_SLOT_ROW_SPACING 6.0f
+
 
 /**
  * Defines the possible focus targets within the lobby menu.
@@ -132,6 +134,13 @@ typedef struct LobbyMenuUIState {
     int slotFactionIds[LOBBY_MENU_MAX_SLOTS];
     bool slotOccupied[LOBBY_MENU_MAX_SLOTS];
     int highlightedFactionId; /* Slot to highlight (e.g. local faction). */
+
+    /* Slot colors (RGBA 0-1) for display and editing. */
+    float slotColors[LOBBY_MENU_MAX_SLOTS][4];
+    bool slotColorValid[LOBBY_MENU_MAX_SLOTS];
+
+    /* Color picker state for RGB selection. */
+    ColorPickerUIState colorPicker;
 } LobbyMenuUIState;
 
 /**
@@ -185,12 +194,28 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount);
 void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId, bool occupied);
 
 /**
+ * Sets the display color for a specific lobby slot.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param color RGBA color in 0-1 range.
+ */
+void LobbyMenuUISetSlotColor(LobbyMenuUIState *state, size_t index, const float color[4]);
+
+/**
  * Sets the highlighted faction ID in the lobby UI.
  * Used to visually distinguish a specific slot (e.g. local player).
  * @param state Pointer to the LobbyMenuUIState to modify.
  * @param factionId Faction ID to highlight, or -1 for none.
  */
 void LobbyMenuUISetHighlightedFactionId(LobbyMenuUIState *state, int factionId);
+
+/**
+ * Configures which faction colors the local user is allowed to edit.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param allowAll True to allow editing any slot color (server).
+ * @param factionId Faction ID allowed to edit when allowAll is false (client).
+ */
+void LobbyMenuUISetColorEditAuthority(LobbyMenuUIState *state, bool allowAll, int factionId);
 
 /**
  * Clears all lobby slots in the UI state.
@@ -260,6 +285,17 @@ void LobbyMenuUIHandleKeyDown(LobbyMenuUIState *state, WPARAM key, bool shiftDow
  * @return True if a start request was pending, false otherwise.
  */
 bool LobbyMenuUIConsumeStartRequest(LobbyMenuUIState *state);
+
+/**
+ * Consumes a committed color change from the lobby UI.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outFactionId Output faction ID whose color changed.
+ * @param outR Output red channel (0-255).
+ * @param outG Output green channel (0-255).
+ * @param outB Output blue channel (0-255).
+ * @return True if a color change was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeColorCommit(LobbyMenuUIState *state, int *outFactionId, uint8_t *outR, uint8_t *outG, uint8_t *outB);
 
 /**
  * Renders the lobby menu UI using OpenGL.

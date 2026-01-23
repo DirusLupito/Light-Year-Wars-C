@@ -48,6 +48,9 @@
 // Type value for a start game packet (server -> clients)
 #define LEVEL_PACKET_TYPE_START_GAME 9u
 
+// Type value for a lobby color update packet (client -> server)
+#define LEVEL_PACKET_TYPE_LOBBY_COLOR 10u
+
 // Definitions of packet structures used for network transmission.
 // We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
 // This translates to "pack the following structures with 1-byte alignment".
@@ -159,6 +162,7 @@ typedef struct LevelLobbySlotInfo {
     int32_t factionId;
     uint8_t occupied;
     uint8_t reserved[3];
+    float color[4];
 } LevelLobbySlotInfo;
 
 // A LevelLobbyStatePacket communicates the lobby configuration and slot occupancy.
@@ -179,6 +183,17 @@ typedef struct LevelLobbyStatePacket {
 typedef struct LevelStartGamePacket {
     uint32_t type;
 } LevelStartGamePacket;
+
+// A LevelLobbyColorPacket communicates a faction color selection change.
+// Sent by clients to the server when they commit a color change in the lobby.
+typedef struct LevelLobbyColorPacket {
+    uint32_t type;
+    int32_t factionId;
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t reserved;
+} LevelLobbyColorPacket;
 
 // A LevelMoveOrderPacket communicates a set of origin planets and a destination
 // planet for fleet movement requests. It is sent by clients to the server.

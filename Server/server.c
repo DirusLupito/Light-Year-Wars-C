@@ -64,6 +64,7 @@ static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
 static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
 static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
+static void HandleLobbyColorPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
 static void RemovePlayer(Player *player);
 static void UpdatePlayerTimeouts(float deltaTime);
@@ -82,6 +83,7 @@ static void SendLobbyStateToPlayerInstance(Player *player);
 static void ProcessLobbyUI();
 static bool AttemptStartGame(void);
 static int HighestAssignedFactionId(void);
+static void ApplyFactionColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b);
 
 /**
  * Converts screen coordinates to world coordinates using the current camera state.
@@ -247,6 +249,7 @@ static void UpdateCamera(HWND window_handle, float deltaTime) {
 static void InitializeLobbyState(void) {
     // Initialize the lobby UI state.
     LobbyMenuUIInitialize(&lobbyMenuUI, true);
+    LobbyMenuUISetColorEditAuthority(&lobbyMenuUI, true, -1);
 
     // Set the initial settings in the lobby UI.
     LobbyMenuUISetSettings(&lobbyMenuUI, &lobbySettings);
@@ -350,6 +353,11 @@ static void RefreshLobbySlots(void) {
         }
         // Update the slot info in the lobby UI.
         LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, (int)i, occupied);
+
+        // Also set the slot color based on the faction color.
+        if (level.factions != NULL && i < level.factionCount) {
+            LobbyMenuUISetSlotColor(&lobbyMenuUI, i, level.factions[i].color);
+        }
     }
 
     // Now clear any highlighted faction ID.
@@ -371,6 +379,31 @@ static int HighestAssignedFactionId(void) {
         }
     }
     return maxId;
+}
+
+/**
+ * Applies a faction color update to the level and lobby UI state.
+ * @param factionId The faction ID to update.
+ * @param r Red channel (0-255).
+ * @param g Green channel (0-255).
+ * @param b Blue channel (0-255).
+ */
+static void ApplyFactionColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b) {
+    if (factionId < 0 || (size_t)factionId >= level.factionCount || level.factions == NULL) {
+        return;
+    }
+
+    // Convert 0-255 color channels to 0-1 float range.
+    float rf = (float)r / 255.0f;
+    float gf = (float)g / 255.0f;
+    float bf = (float)b / 255.0f;
+    FactionSetColor(&level.factions[factionId], rf, gf, bf);
+
+    // Update the lobby UI slot color as well 
+    // (the thing displayed to the right of the player/faction name).
+    float color[4] = {rf, gf, bf, 1.0f};
+    LobbyMenuUISetSlotColor(&lobbyMenuUI, (size_t)factionId, color);
+    lobbyStateDirty = true;
 }
 
 /**
@@ -410,7 +443,14 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
         slots[i].occupied = 0u;
 
         // Clear reserved bytes, then iterate through players to see if any occupy this slot.
+        // We also set the slot color based on the faction color.
+
         memset(slots[i].reserved, 0, sizeof(slots[i].reserved));
+        memset(slots[i].color, 0, sizeof(slots[i].color));
+
+        if (i < level.factionCount && level.factions != NULL) {
+            memcpy(slots[i].color, level.factions[i].color, sizeof(slots[i].color));
+        }
         for (size_t j = 0; j < playerCount; ++j) {
             if (players[j].factionId == (int)i) {
                 slots[i].occupied = 1u;
@@ -510,6 +550,13 @@ static void ProcessLobbyUI(void) {
         if (!AttemptStartGame()) {
             // AttemptStartGame will update the status message on failure.
         }
+    }
+
+    // Apply any committed color changes from the server lobby UI.
+    int factionId = -1;
+    uint8_t r = 0, g = 0, b = 0;
+    if (LobbyMenuUIConsumeColorCommit(&lobbyMenuUI, &factionId, &r, &g, &b)) {
+        ApplyFactionColorUpdate(factionId, r, g, b);
     }
 }
 
@@ -1136,6 +1183,41 @@ static void BroadcastServerShutdown(void) {
 }
 
 /**
+ * Processes a lobby color update packet received from a client.
+ * Valid only during the lobby stage and for the sender's own faction.
+ * @param sender Address of the client that sent the packet.
+ * @param data Pointer to the packet data.
+ * @param size Size of the packet data.
+ */
+static void HandleLobbyColorPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size) {
+    if (sender == NULL || data == NULL || size < sizeof(LevelLobbyColorPacket)) {
+        return;
+    }
+
+    if (currentStage != SERVER_STAGE_LOBBY) {
+        return;
+    }
+
+    const LevelLobbyColorPacket *packet = (const LevelLobbyColorPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_LOBBY_COLOR) {
+        return;
+    }
+
+    Player *player = FindPlayerByAddress(sender);
+    if (player == NULL || player->faction == NULL) {
+        return;
+    }
+
+    // If the player somehow sent a color update for a faction they do not own, ignore it.
+    // Players should not be allowed to change other factions' colors.
+    if (player->factionId != packet->factionId) {
+        return;
+    }
+
+    ApplyFactionColorUpdate(packet->factionId, packet->r, packet->g, packet->b);
+}
+
+/**
  * Launches a fleet from the origin planet to the destination planet
  * and broadcasts the launch to all connected players to allow their
  * clients to simulate the fleet movement.
@@ -1573,6 +1655,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
                 if (packetType == LEVEL_PACKET_TYPE_MOVE_ORDER) {
                     HandleMoveOrderPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
+                    handled = true;
+                } else if (packetType == LEVEL_PACKET_TYPE_LOBBY_COLOR) {
+                    HandleLobbyColorPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
                     handled = true;
                 } else if (packetType == LEVEL_PACKET_TYPE_CLIENT_DISCONNECT) {
                     // It's a disconnect notice from a client.
