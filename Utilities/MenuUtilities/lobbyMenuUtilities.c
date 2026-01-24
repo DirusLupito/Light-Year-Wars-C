@@ -572,6 +572,7 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount) {
         state->slotFactionIds[i] = -1;
         state->slotOccupied[i] = false;
         state->slotColorValid[i] = false;
+        state->slotNames[i][0] = '\0';
     }
 
     // Update the slot count.
@@ -585,7 +586,7 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount) {
  * @param factionId Faction ID assigned to the slot, or -1 if unassigned.
  * @param occupied True if the slot is occupied, false otherwise.
  */
-void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId, bool occupied) {
+void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId, bool occupied, const char *playerName) {
     // Validate parameters.
     if (state == NULL || index >= LOBBY_MENU_MAX_SLOTS) {
         return;
@@ -603,6 +604,12 @@ void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId
     // Update the slot information.
     state->slotFactionIds[index] = factionId;
     state->slotOccupied[index] = occupied;
+    if (occupied && playerName != NULL) {
+        strncpy(state->slotNames[index], playerName, PLAYER_NAME_MAX_LENGTH);
+        state->slotNames[index][PLAYER_NAME_MAX_LENGTH] = '\0';
+    } else {
+        state->slotNames[index][0] = '\0';
+    }
 }
 
 /**
@@ -670,6 +677,7 @@ void LobbyMenuUIClearSlots(LobbyMenuUIState *state) {
         state->slotFactionIds[i] = -1;
         state->slotOccupied[i] = false;
         state->slotColorValid[i] = false;
+        state->slotNames[i][0] = '\0';
     }
 }
 
@@ -1134,7 +1142,19 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
     float rowY = slotArea.y;
     for (size_t i = 0; i < state->slotCount; ++i) {
         int factionId = state->slotFactionIds[i];
+
+        // Determine the display name for the slot
+        // which depends on whether it's occupied and has a custom name.
+        // Occupied slots with an empty name show "Occupied" to avoid confusion.
         bool occupied = state->slotOccupied[i];
+        const char *displayName = NULL;
+        if (occupied && state->slotNames[i][0] != '\0') {
+            displayName = state->slotNames[i];
+        } else if (occupied) {
+            displayName = "Occupied";
+        } else {
+            displayName = "Empty";
+        }
 
         // Construct the slot line text.
 
@@ -1142,9 +1162,9 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
         // Otherwise, just show the slot number and status.
         char line[96];
         if (factionId >= 0) {
-            snprintf(line, sizeof(line), "Slot %zu (Faction %d): %s", i + 1, factionId, occupied ? "Occupied" : "Empty");
+            snprintf(line, sizeof(line), "Slot %zu (Faction %d): %s", i + 1, factionId, displayName);
         } else {
-            snprintf(line, sizeof(line), "Slot %zu: %s", i + 1, occupied ? "Occupied" : "Empty");
+            snprintf(line, sizeof(line), "Slot %zu: %s", i + 1, displayName);
         }
 
         // Determine slot text color based on whether it's highlighted.

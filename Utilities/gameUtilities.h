@@ -6,13 +6,13 @@
 #ifndef _GAME_UTILITIES_H_
 #define _GAME_UTILITIES_H_
 
+#include "Objects/level.h"
 #include <profileapi.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <math.h>
 #include <stdlib.h>
-#include "Objects/level.h"
 #include "Objects/starship.h"
 #include "Objects/vec2.h"
 

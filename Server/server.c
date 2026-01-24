@@ -62,7 +62,7 @@ static const float CLIENT_TIMEOUT_SECONDS = (float)CLIENT_TIMEOUT_MS / 1000.0f;
 // Forward declarations of static functions
 static Player *FindPlayerByAddress(const SOCKADDR_IN *address);
 static const Faction *FindAvailableFaction(void);
-static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address);
+static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address, const char *playerName);
 static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static void HandleLobbyColorPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
@@ -345,14 +345,16 @@ static void RefreshLobbySlots(void) {
     // Then iterate through each slot and determine if it is occupied by any player.
     for (size_t i = 0; i < (size_t)lobbySettings.factionCount; ++i) {
         bool occupied = false;
+        const char *occupantName = "";
         for (size_t j = 0; j < playerCount; ++j) {
             if (players[j].factionId == (int)i) {
                 occupied = true;
+                occupantName = players[j].name;
                 break;
             }
         }
         // Update the slot info in the lobby UI.
-        LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, (int)i, occupied);
+        LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, (int)i, occupied, occupantName);
 
         // Also set the slot color based on the faction color.
         if (level.factions != NULL && i < level.factionCount) {
@@ -439,14 +441,9 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
 
     // Populate each slot's info based on player assignments.
     for (size_t i = 0; i < slotCount; ++i) {
+        memset(&slots[i], 0, sizeof(LevelLobbySlotInfo));
         slots[i].factionId = (int32_t)i;
         slots[i].occupied = 0u;
-
-        // Clear reserved bytes, then iterate through players to see if any occupy this slot.
-        // We also set the slot color based on the faction color.
-
-        memset(slots[i].reserved, 0, sizeof(slots[i].reserved));
-        memset(slots[i].color, 0, sizeof(slots[i].color));
 
         if (i < level.factionCount && level.factions != NULL) {
             memcpy(slots[i].color, level.factions[i].color, sizeof(slots[i].color));
@@ -454,6 +451,8 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
         for (size_t j = 0; j < playerCount; ++j) {
             if (players[j].factionId == (int)i) {
                 slots[i].occupied = 1u;
+                strncpy(slots[i].playerName, players[j].name, PLAYER_NAME_MAX_LENGTH);
+                slots[i].playerName[PLAYER_NAME_MAX_LENGTH] = '\0';
                 break;
             }
         }
@@ -605,13 +604,6 @@ static bool AttemptStartGame(void) {
         }
     }
 
-    // Debug, check faction colors of the level before reconfiguration.
-    for (size_t i = 0; i < existingFactionCount; ++i) {
-        Faction *faction = &existingFactions[i];
-        printf("Existing Faction %d Color: R=%.2f G=%.2f B=%.2f\n",
-            faction->id, faction->color[0], faction->color[1], faction->color[2]);
-    }
-
     // Configure the level with the correct planet and starship capacity
     // (before, it only had the correct faction count).
 
@@ -667,12 +659,6 @@ static bool AttemptStartGame(void) {
             parsed.randomSeed)) {
         LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Failed to generate level with the provided settings.");
         return false;
-    }
-
-    for (size_t i = 0; i < level.factionCount; ++i) {
-        Faction *faction = &level.factions[i];
-        printf("Generated Faction %d Color: R=%.2f G=%.2f B=%.2f\n",
-            faction->id, faction->color[0], faction->color[1], faction->color[2]);
     }
 
     // We successfully generated the level, so apply the new settings.
@@ -1092,7 +1078,7 @@ static const Faction *FindAvailableFaction(void) {
  * @param address A pointer to the SOCKADDR_IN structure representing the player's address.
  * @return A pointer to the Player if successful, NULL otherwise.
  */
-static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
+static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address, const char *playerName) {
     // Basic validation of input pointer.
     if (address == NULL) {
         return NULL;
@@ -1109,6 +1095,7 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
         // We also reset their inactivity timer
         // since they have just sent us a packet.
         existing->inactivitySeconds = 0.0f;
+        PlayerSetName(existing, playerName);
         return existing;
     }
 
@@ -1127,6 +1114,7 @@ static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address) {
     // using the found faction and provided address.
     Player *player = &players[playerCount++];
     PlayerInit(player, faction, address);
+    PlayerSetName(player, playerName);
 
     // Reset inactivity timer since this is a new player.
     player->inactivitySeconds = 0.0f;
@@ -1607,16 +1595,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 senderPlayer->inactivitySeconds = 0.0f;
             }
 
+            // First, we determine the packet type.
+            uint32_t packetType = 0;
+            if (bytes_received >= (int)sizeof(uint32_t)) {
+                memcpy(&packetType, recv_buffer, sizeof(uint32_t));
+            }
+
             // Check if the packet is a JOIN request.
-            if (bytes_received >= 4 && strncmp(recv_buffer, "JOIN", 4) == 0) {
+            if (!handled && packetType == LEVEL_PACKET_TYPE_JOIN_REQUEST && bytes_received >= (int)sizeof(LevelJoinRequestPacket)) {
                 handled = true;
 
-                // Null-terminate so we can safely treat it as text.
-                recv_buffer[bytes_received] = '\0';
+                const LevelJoinRequestPacket *joinPacket = (const LevelJoinRequestPacket *)recv_buffer;
+                char requestedName[PLAYER_NAME_MAX_LENGTH + 1];
+                size_t nameLen = strnlen(joinPacket->playerName, PLAYER_NAME_MAX_LENGTH);
+                memcpy(requestedName, joinPacket->playerName, nameLen);
+                requestedName[nameLen] = '\0';
+
+                if (!PlayerValidateName(requestedName)) {
+                    // Reject invalid names to keep lobby text safe.
+                    SendJoinReject(&sender_address, "Invalid player name.", server_socket);
+                    continue;
+                }
 
                 // Ensure a player exists for the sender's address
                 // and respond based on the current server stage.
-                Player *player = EnsurePlayerForAddress(&sender_address);
+                Player *player = EnsurePlayerForAddress(&sender_address, requestedName);
                 if (player != NULL) {
                     // In case of a new player from a new address,
                     // we reset their inactivity timer.
@@ -1650,9 +1653,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             // If the packet wasn't handled yet, we check if it's a move order packet
             // or a client disconnect packet.
             if (!handled && bytes_received >= (int)sizeof(uint32_t)) {
-                uint32_t packetType = 0;
-                memcpy(&packetType, recv_buffer, sizeof(uint32_t));
-
                 if (packetType == LEVEL_PACKET_TYPE_MOVE_ORDER) {
                     HandleMoveOrderPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
                     handled = true;

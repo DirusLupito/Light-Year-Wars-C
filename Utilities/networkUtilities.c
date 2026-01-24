@@ -5,6 +5,7 @@
  */
 
 #include "Utilities/networkUtilities.h"
+#include "Objects/player.h"
 
 /**
  * Initializes Winsock.
@@ -448,5 +449,37 @@ void BroadcastStartGame(SOCKET sock, Player *players, size_t playerCount) {
         if (result == SOCKET_ERROR) {
             printf("start game sendto failed: %d\n", WSAGetLastError());
         }
+    }
+}
+
+/**
+ * Sends a targeted disconnect packet to reject a join attempt with a reason.
+ * @param address Remote address to notify.
+ * @param reason Null-terminated reason string (may be truncated).
+ */
+void SendJoinReject(const SOCKADDR_IN *address, const char *reason, SOCKET server_socket) {
+    if (address == NULL || server_socket == INVALID_SOCKET) {
+        return;
+    }
+
+    // Prepare the disconnect packet.
+    LevelServerDisconnectPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_SERVER_DISCONNECT;
+    if (reason != NULL) {
+        strncpy(packet.reason, reason, sizeof(packet.reason) - 1);
+        packet.reason[sizeof(packet.reason) - 1] = '\0';
+    }
+
+    // Send the disconnect packet to the specified address.
+    int sent = sendto(server_socket,
+        (const char *)&packet,
+        (int)sizeof(packet),
+        0,
+        (const SOCKADDR *)address,
+        (int)sizeof(*address));
+
+    // Report any send errors.
+    if (sent == SOCKET_ERROR) {
+        printf("sendto failed: %d\n", WSAGetLastError());
     }
 }

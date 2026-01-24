@@ -17,7 +17,6 @@
 #include <stdlib.h>
 
 #include "Objects/level.h"
-#include "Objects/player.h"
 
 typedef struct Level Level;
 typedef struct Player Player;
@@ -158,5 +157,12 @@ void BroadcastLobbyState(SOCKET sock, Player *players, size_t playerCount, const
  * @param playerCount The number of players in the array.
  */
 void BroadcastStartGame(SOCKET sock, Player *players, size_t playerCount);
+
+/**
+ * Sends a targeted disconnect packet to reject a join attempt with a reason.
+ * @param address Remote address to notify.
+ * @param reason Null-terminated reason string (may be truncated).
+ */
+void SendJoinReject(const SOCKADDR_IN *address, const char *reason, SOCKET server_socket);
 
 #endif // _NETWORK_UTILITIES_H_

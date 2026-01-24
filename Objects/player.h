@@ -6,10 +6,19 @@
 #ifndef _PLAYER_H_
 #define _PLAYER_H_
 
+#include <winsock2.h>
+#include <windows.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
+#include <stddef.h>
 #include "Objects/faction.h"
-#include "Utilities/networkUtilities.h"
+
+// Maximum length for a player's display name (excluding null terminator).
+#define PLAYER_NAME_MAX_LENGTH 30
+
+// Minimum length for a player's display name (excluding null terminator).
+#define PLAYER_NAME_MIN_LENGTH 1
 
 // A player represents a user in the game.
 // Each player is uniquely associated with a network/IPv4 address,
@@ -19,6 +28,7 @@ typedef struct Player {
     const Faction *faction;
     int factionId;
     SOCKADDR_IN address;
+    char name[PLAYER_NAME_MAX_LENGTH + 1];
     bool awaitingFullPacket;
     float inactivitySeconds;
 } Player;
@@ -44,6 +54,20 @@ void PlayerUpdateEndpoint(Player *player, const SOCKADDR_IN *address);
  * @param faction The faction to assign. May be NULL to clear assignment.
  */
 void PlayerSetFaction(Player *player, const Faction *faction);
+
+/**
+ * Validates a proposed player name for ASCII and length bounds.
+ * @param name Candidate null-terminated name string.
+ * @return true if the name meets length and character requirements, false otherwise.
+ */
+bool PlayerValidateName(const char *name);
+
+/**
+ * Assigns a validated name to the player or clears it when invalid.
+ * @param player The player to update.
+ * @param name Candidate null-terminated name string.
+ */
+void PlayerSetName(Player *player, const char *name);
 
 /**
  * Checks whether the player matches the supplied address (by IPv4 address).

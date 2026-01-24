@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "Objects/player.h"
 #include "Objects/faction.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
@@ -50,6 +51,9 @@
 
 // Type value for a lobby color update packet (client -> server)
 #define LEVEL_PACKET_TYPE_LOBBY_COLOR 10u
+
+// Type value for a join request packet (client -> server)
+#define LEVEL_PACKET_TYPE_JOIN_REQUEST 11u
 
 // Definitions of packet structures used for network transmission.
 // We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
@@ -156,13 +160,20 @@ typedef struct LevelServerDisconnectPacket {
     char reason[128];
 } LevelServerDisconnectPacket;
 
+// A LevelJoinRequestPacket carries the player's chosen display name when connecting.
+typedef struct LevelJoinRequestPacket {
+    uint32_t type;
+    char playerName[PLAYER_NAME_MAX_LENGTH + 1];
+} LevelJoinRequestPacket;
+
 // A LevelLobbySlotInfo communicates who occupies a given faction slot in the lobby.
-// occupied is 1 when filled by a player, otherwise 0. Additional bytes are reserved for alignment.
+// occupied is 1 when filled by a player, otherwise 0. playerName mirrors the client's chosen name.
 typedef struct LevelLobbySlotInfo {
     int32_t factionId;
     uint8_t occupied;
     uint8_t reserved[3];
     float color[4];
+    char playerName[PLAYER_NAME_MAX_LENGTH + 1];
 } LevelLobbySlotInfo;
 
 // A LevelLobbyStatePacket communicates the lobby configuration and slot occupancy.

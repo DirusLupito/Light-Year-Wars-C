@@ -134,7 +134,7 @@ static void HandleStartGamePacketMessage(const uint8_t *data, size_t length);
 static void ResetConnectionToMenu(const char *statusMessage);
 static const Faction *ResolveFactionById(int32_t factionId);
 static void ProcessNetworkMessages(void);
-static void SendJoinRequest(void);
+static void SendJoinRequest(const char *playerName);
 static void SendDisconnectNotice(void);
 static void SendLobbyColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b);
 static void ProcessMenuConnectRequest(void);
@@ -920,7 +920,8 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
     const LevelLobbySlotInfo *slots = (const LevelLobbySlotInfo *)(data + sizeof(LevelLobbyStatePacket));
     for (size_t i = 0; i < slotCount; ++i) {
         bool occupied = slots[i].occupied != 0u;
-        LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, slots[i].factionId, occupied);
+        const char *slotName = occupied ? slots[i].playerName : "";
+        LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, slots[i].factionId, occupied, slotName);
         LobbyMenuUISetSlotColor(&lobbyMenuUI, i, slots[i].color);
     }
 
@@ -1076,21 +1077,29 @@ static void ProcessNetworkMessages(void) {
  * This is used to request joining the game session.
  * Upon receiving a join request, the server should respond
  * with a full level packet and an assignment packet.
+ * @param playerName The desired player name to use in the lobby being joined.
  */
-static void SendJoinRequest(void) {
+static void SendJoinRequest(const char *playerName) {
     // If the server address is not valid or the client socket is not valid, do nothing.
     if (!serverAddressValid || clientSocket == INVALID_SOCKET) {
         return;
     }
 
-    // Prepare and send the join request message.
-    // For now, this is a simple text message "JOIN",
-    // with the client's IP also implicitly known on the server side
-    // from the source address of the received packet.
-    const char *joinMessage = "JOIN";
+    // Validate the name again here to avoid shipping bad data even if UI checks were skipped somehow.
+    if (playerName == NULL || !PlayerValidateName(playerName)) {
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Invalid player name provided.");
+        return;
+    }
+
+    // Prepare the structured join request so the server can read the desired name without parsing text.
+    LevelJoinRequestPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_JOIN_REQUEST;
+    strncpy(packet.playerName, playerName, PLAYER_NAME_MAX_LENGTH);
+    packet.playerName[PLAYER_NAME_MAX_LENGTH] = '\0';
+
     int result = sendto(clientSocket,
-        joinMessage,
-        (int)strlen(joinMessage),
+        (const char *)&packet,
+        (int)sizeof(packet),
         0,
         (struct sockaddr *)&serverAddress,
         (int)sizeof(serverAddress));
@@ -1174,14 +1183,15 @@ static void SendLobbyColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b)
  * creates a UDP socket, and sends a join request to the server.
  */
 static void ProcessMenuConnectRequest(void) {
-    // Allocate buffers for the IP address and port.
+    // Allocate buffers for the user's input.
     char ip[LOGIN_MENU_IP_MAX_LENGTH + 1];
     char portBuffer[LOGIN_MENU_PORT_MAX_LENGTH + 1];
+    char playerName[PLAYER_NAME_MAX_LENGTH + 1];
 
     // Try to see if the user has requested to connect to a server.
     // This function must be called regularly to check for requests 
     // (triggered by the user clicking the Connect button).
-    if (!LoginMenuUIConsumeConnectRequest(&loginMenuUI, ip, sizeof(ip), portBuffer, sizeof(portBuffer))) {
+    if (!LoginMenuUIConsumeConnectRequest(&loginMenuUI, ip, sizeof(ip), portBuffer, sizeof(portBuffer), playerName, sizeof(playerName))) {
         // No connect request to process.
         return;
     }
@@ -1199,6 +1209,7 @@ static void ProcessMenuConnectRequest(void) {
     // Clean up any leading/trailing whitespace from the inputs.
     TrimWhitespace(ip);
     TrimWhitespace(portBuffer);
+    TrimWhitespace(playerName);
 
     // Validate IP address.
     if (ip[0] == '\0') {
@@ -1210,6 +1221,12 @@ static void ProcessMenuConnectRequest(void) {
     if (portBuffer[0] == '\0') {
         // Triggered if the user did not enter a port.
         LoginMenuUISetStatusMessage(&loginMenuUI, "Please enter a server port.");
+        return;
+    }
+
+    // Validate player name before attempting the connection.
+    if (!PlayerValidateName(playerName)) {
+        LoginMenuUISetStatusMessage(&loginMenuUI, "Name must be 1-30 ASCII characters.");
         return;
     }
 
@@ -1287,7 +1304,7 @@ static void ProcessMenuConnectRequest(void) {
     LoginMenuUISetStatusMessage(&loginMenuUI, status);
 
     // Delegate to helper function to send the actual join request.
-    SendJoinRequest();
+    SendJoinRequest(playerName);
 }
 
 /**

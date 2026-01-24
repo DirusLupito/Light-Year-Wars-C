@@ -8,6 +8,7 @@
 #ifndef _LOBBY_MENU_UTILITIES_H_
 #define _LOBBY_MENU_UTILITIES_H_
 
+#include "Objects/player.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -134,6 +135,7 @@ typedef struct LobbyMenuUIState {
     size_t slotCount;
     int slotFactionIds[LOBBY_MENU_MAX_SLOTS];
     bool slotOccupied[LOBBY_MENU_MAX_SLOTS];
+    char slotNames[LOBBY_MENU_MAX_SLOTS][PLAYER_NAME_MAX_LENGTH + 1];
     int highlightedFactionId; /* Slot to highlight (e.g. local faction). */
 
     /* Slot colors (RGBA 0-1) for display and editing. */
@@ -195,8 +197,9 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount);
  * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
  * @param factionId Faction ID assigned to the slot, or -1 if unassigned.
  * @param occupied True if the slot is occupied, false otherwise.
+ * @param playerName Null-terminated player name occupying the slot (ignored when not occupied).
  */
-void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId, bool occupied);
+void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId, bool occupied, const char *playerName);
 
 /**
  * Sets the display color for a specific lobby slot.

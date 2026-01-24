@@ -7,6 +7,7 @@
 #ifndef _LOGIN_MENU_UTILITIES_H_
 #define _LOGIN_MENU_UTILITIES_H_
 
+#include "Objects/player.h"
 #include <stddef.h>
 #include <stdbool.h>
 #include <windows.h>
@@ -30,6 +31,9 @@
 // Maximum length for the status message.
 #define LOGIN_MENU_STATUS_MAX_LENGTH 127
 
+// Maximum length for the player name field on the login screen.
+#define LOGIN_MENU_NAME_MAX_LENGTH PLAYER_NAME_MAX_LENGTH
+
 // Width of the entire menu panel.
 #define LOGIN_MENU_FIELD_HEIGHT 44.0f
 
@@ -51,7 +55,8 @@
 typedef enum LoginMenuFocusTarget {
     LOGIN_MENU_FOCUS_NONE = 0,
     LOGIN_MENU_FOCUS_IP,
-    LOGIN_MENU_FOCUS_PORT
+    LOGIN_MENU_FOCUS_PORT,
+    LOGIN_MENU_FOCUS_NAME
 } LoginMenuFocusTarget;
 
 // Defines the state of the log in menu UI.
@@ -62,6 +67,8 @@ typedef struct LoginMenuUIState {
     size_t ipLength;
     char portBuffer[LOGIN_MENU_PORT_MAX_LENGTH + 1];
     size_t portLength;
+    char nameBuffer[LOGIN_MENU_NAME_MAX_LENGTH + 1];
+    size_t nameLength;
     LoginMenuFocusTarget focus;
     bool connectRequested;
     bool connectButtonPressed;
@@ -72,6 +79,7 @@ typedef struct LoginMenuUIState {
     /* Componentized UI elements for reuse across screens. */
     MenuInputFieldComponent ipFieldComponent;
     MenuInputFieldComponent portFieldComponent;
+    MenuInputFieldComponent nameFieldComponent;
     MenuButtonComponent connectButtonComponent;
     char statusMessage[LOGIN_MENU_STATUS_MAX_LENGTH + 1];
 } LoginMenuUIState;
@@ -138,9 +146,11 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
  * @param ipCapacity Capacity of the IP address output buffer.
  * @param portOut Output buffer for the port.
  * @param portCapacity Capacity of the port output buffer.
+ * @param nameOut Output buffer for the player name.
+ * @param nameCapacity Capacity of the player name output buffer.
  * @return True if a connect request was consumed, false otherwise.
  */
-bool LoginMenuUIConsumeConnectRequest(LoginMenuUIState *state, char *ipOut, size_t ipCapacity, char *portOut, size_t portCapacity);
+bool LoginMenuUIConsumeConnectRequest(LoginMenuUIState *state, char *ipOut, size_t ipCapacity, char *portOut, size_t portCapacity, char *nameOut, size_t nameCapacity);
 
 /**
  * Sets the status message to be displayed in the login menu UI.

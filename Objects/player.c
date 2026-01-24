@@ -8,8 +8,7 @@
  */
 
 #include "Objects/player.h"
-
-#include <string.h>
+#include "Utilities/networkUtilities.h"
 
 /**
  * Initializes a player with the given faction and network address.
@@ -42,6 +41,9 @@ void PlayerInit(Player *player, const Faction *faction, const SOCKADDR_IN *addre
     // Used to track time since last packet from this player
     // on the server side for the sake of inactivity timeouts.
     player->inactivitySeconds = 0.0f;
+
+    // Clear the player name so stale data is never rendered before a join request arrives.
+    PlayerSetName(player, "");
 }
 
 /**
@@ -59,6 +61,57 @@ void PlayerSetFaction(Player *player, const Faction *faction) {
     
     // Store the faction ID, or -1 if no faction is assigned.
     player->factionId = (faction != NULL) ? faction->id : -1;
+}
+
+/**
+ * Validates a proposed player name for ASCII range and length bounds.
+ * This keeps UI and network code from accepting names that would break rendering or packets.
+ * @param name Candidate null-terminated name string.
+ * @return true if the name meets length and character requirements, false otherwise.
+ */
+bool PlayerValidateName(const char *name) {
+    if (name == NULL) {
+        return false;
+    }
+
+    // Ensure length is within bounds.
+    size_t len = strnlen(name, PLAYER_NAME_MAX_LENGTH + 1);
+    if (len < PLAYER_NAME_MIN_LENGTH || len > PLAYER_NAME_MAX_LENGTH) {
+        return false;
+    }
+
+    // Ensure all characters are printable ASCII.
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char ch = (unsigned char)name[i];
+        if (ch < 32u || ch > 126u) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Assigns a validated name to the player or clears it if invalid.
+ * Clearing on invalid input avoids leaking untrusted bytes into packets or UI text.
+ * @param player The player to update.
+ * @param name Candidate null-terminated name string.
+ */
+void PlayerSetName(Player *player, const char *name) {
+    if (player == NULL) {
+        return;
+    }
+
+    // If the name is invalid, we clear the player's name.
+    if (!PlayerValidateName(name)) {
+        player->name[0] = '\0';
+        return;
+    }
+
+    // Copy the validated name into the player's name buffer.
+    size_t len = strnlen(name, PLAYER_NAME_MAX_LENGTH);
+    memcpy(player->name, name, len);
+    player->name[len] = '\0';
 }
 
 /**

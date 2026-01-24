@@ -14,9 +14,9 @@
  * @author abmize
  */
 
+#include "Objects/level.h"
 #include "Objects/planet.h"
 
-#include "Objects/level.h"
 #include "Objects/starship.h"
 #include "Utilities/gameUtilities.h"
 

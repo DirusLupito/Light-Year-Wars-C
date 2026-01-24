@@ -24,6 +24,14 @@ static const MenuInputFieldSpec kLoginPortFieldSpec = {
     MENU_INPUT_FIELD_INT
 };
 
+static const MenuInputFieldSpec kLoginNameFieldSpec = {
+    "Player Name",
+    "Min 1 - Max 30 characters",
+    LOGIN_MENU_FIELD_HEIGHT,
+    LOGIN_MENU_FIELD_SPACING,
+    MENU_INPUT_FIELD_TEXT
+};
+
 static const char *kLoginButtonLabel = "Connect";
 
 /**
@@ -39,6 +47,8 @@ static void LoginMenuInitComponents(LoginMenuUIState *state) {
         state->ipBuffer, sizeof(state->ipBuffer), &state->ipLength);
     MenuInputFieldInitialize(&state->portFieldComponent, &kLoginPortFieldSpec,
         state->portBuffer, sizeof(state->portBuffer), &state->portLength);
+    MenuInputFieldInitialize(&state->nameFieldComponent, &kLoginNameFieldSpec,
+        state->nameBuffer, sizeof(state->nameBuffer), &state->nameLength);
     MenuButtonInitialize(&state->connectButtonComponent, kLoginButtonLabel,
         240.0f, LOGIN_MENU_BUTTON_HEIGHT);
 }
@@ -53,6 +63,7 @@ static float LoginMenuPanelHeight(const LoginMenuUIState *state) {
     return LOGIN_MENU_PANEL_PADDING +
         kLoginIpFieldSpec.height + kLoginIpFieldSpec.spacingBelow +
         kLoginPortFieldSpec.height + kLoginPortFieldSpec.spacingBelow +
+        kLoginNameFieldSpec.height + kLoginNameFieldSpec.spacingBelow +
         LOGIN_MENU_BUTTON_HEIGHT + LOGIN_MENU_PANEL_PADDING;
 }
 
@@ -148,6 +159,9 @@ static void LoginMenuLayout(LoginMenuUIState *state,
     MenuInputFieldLayout(&state->portFieldComponent, innerX, cursorY, fieldWidth);
     cursorY += kLoginPortFieldSpec.height + kLoginPortFieldSpec.spacingBelow;
 
+    MenuInputFieldLayout(&state->nameFieldComponent, innerX, cursorY, fieldWidth);
+    cursorY += kLoginNameFieldSpec.height + kLoginNameFieldSpec.spacingBelow;
+
     MenuButtonLayout(&state->connectButtonComponent, innerX, cursorY, fieldWidth);
 
     if (panelOut != NULL) {
@@ -171,6 +185,7 @@ static void LoginMenuSetFocus(LoginMenuUIState *state, LoginMenuFocusTarget targ
     state->focus = target;
     MenuInputFieldSetFocus(&state->ipFieldComponent, target == LOGIN_MENU_FOCUS_IP);
     MenuInputFieldSetFocus(&state->portFieldComponent, target == LOGIN_MENU_FOCUS_PORT);
+    MenuInputFieldSetFocus(&state->nameFieldComponent, target == LOGIN_MENU_FOCUS_NAME);
 }
 
 /**
@@ -191,7 +206,7 @@ void LoginMenuUIInitialize(LoginMenuUIState *state) {
     state->connectButtonComponent.enabled = true;
 
     // Prepare default status message.
-    LoginMenuUISetStatusMessage(state, "Enter the server IP and port, then click Connect.");
+    LoginMenuUISetStatusMessage(state, "Enter the server IP, port, and your username, then click Connect.");
 }
 
 /**
@@ -251,6 +266,8 @@ void LoginMenuUIHandleMouseDown(LoginMenuUIState *state, float x, float y, int w
         LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_IP);
     } else if (MenuUIRectContains(&state->portFieldComponent.rect, x, y)) {
         LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_PORT);
+    } else if (MenuUIRectContains(&state->nameFieldComponent.rect, x, y)) {
+        LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_NAME);
     } else {
         LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_NONE);
     }
@@ -329,6 +346,8 @@ void LoginMenuUIHandleChar(LoginMenuUIState *state, unsigned int codepoint) {
         MenuInputFieldHandleChar(&state->ipFieldComponent, codepoint);
     } else if (state->focus == LOGIN_MENU_FOCUS_PORT) {
         MenuInputFieldHandleChar(&state->portFieldComponent, codepoint);
+    } else if (state->focus == LOGIN_MENU_FOCUS_NAME) {
+        MenuInputFieldHandleChar(&state->nameFieldComponent, codepoint);
     }
 }
 
@@ -355,6 +374,8 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
                 MenuInputFieldHandleBackspace(&state->ipFieldComponent);
             } else if (state->focus == LOGIN_MENU_FOCUS_PORT) {
                 MenuInputFieldHandleBackspace(&state->portFieldComponent);
+            } else if (state->focus == LOGIN_MENU_FOCUS_NAME) {
+                MenuInputFieldHandleBackspace(&state->nameFieldComponent);
             }
             break;
 
@@ -363,15 +384,17 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
             if (state->focus == LOGIN_MENU_FOCUS_IP) {
                 LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_NONE : LOGIN_MENU_FOCUS_PORT);
             } else if (state->focus == LOGIN_MENU_FOCUS_PORT) {
-                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_IP : LOGIN_MENU_FOCUS_NONE);
+                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_IP : LOGIN_MENU_FOCUS_NAME);
+            } else if (state->focus == LOGIN_MENU_FOCUS_NAME) {
+                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_PORT : LOGIN_MENU_FOCUS_NONE);
             } else {
-                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_PORT : LOGIN_MENU_FOCUS_IP);
+                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_NAME : LOGIN_MENU_FOCUS_IP);
             }
             break;
 
         // Enter/return requests a connection if a field is focused.
         case VK_RETURN:
-            if (state->focus == LOGIN_MENU_FOCUS_IP || state->focus == LOGIN_MENU_FOCUS_PORT) {
+            if (state->focus == LOGIN_MENU_FOCUS_IP || state->focus == LOGIN_MENU_FOCUS_PORT || state->focus == LOGIN_MENU_FOCUS_NAME) {
                 state->connectRequested = true;
             }
             break;
@@ -388,7 +411,7 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
 
 /**
  * Consumes a connect request from the login menu UI, if one exists.
- * Copies the IP address and port to the provided output buffers.
+ * Copies the IP address, port, and player name to the provided output buffers.
  * @param state Pointer to the LoginMenuUIState.
  * @param ipOut Output buffer for the IP address.
  * @param ipCapacity Capacity of the IP address output buffer.
@@ -400,10 +423,12 @@ bool LoginMenuUIConsumeConnectRequest(LoginMenuUIState *state,
     char *ipOut,
     size_t ipCapacity,
     char *portOut,
-    size_t portCapacity) {
+    size_t portCapacity,
+    char *nameOut,
+    size_t nameCapacity) {
 
     // If state or output buffers are null, we can't proceed.
-    if (state == NULL || ipOut == NULL || portOut == NULL) {
+    if (state == NULL || ipOut == NULL || portOut == NULL || nameOut == NULL) {
         return false;
     }
 
@@ -425,6 +450,11 @@ bool LoginMenuUIConsumeConnectRequest(LoginMenuUIState *state,
     if (portCapacity > 0) {
         strncpy(portOut, state->portBuffer, portCapacity - 1);
         portOut[portCapacity - 1] = '\0';
+    }
+
+    if (nameCapacity > 0) {
+        strncpy(nameOut, state->nameBuffer, nameCapacity - 1);
+        nameOut[nameCapacity - 1] = '\0';
     }
 
     return true;
@@ -482,7 +512,7 @@ void LoginMenuUIDraw(LoginMenuUIState *state, OpenGLContext *context, int width,
     float panelFill[4] = MENU_PANEL_FILL_COLOR;
     DrawOutlinedRectangle(panel.x, panel.y, panel.x + panel.width, panel.y + panel.height, panelOutline, panelFill);
 
-    // Draw the IP and port fields and the connect button.
+    // Draw the input fields and the connect button.
     // Also draw labels and current contents.
     const float labelColor[4] = MENU_LABEL_TEXT_COLOR;
     const float textColor[4] = MENU_INPUT_TEXT_COLOR;
@@ -493,6 +523,9 @@ void LoginMenuUIDraw(LoginMenuUIState *state, OpenGLContext *context, int width,
 
     // Port field
     MenuInputFieldDraw(&state->portFieldComponent, context, labelColor, textColor, placeholderColor);
+    
+    // Player Name field
+    MenuInputFieldDraw(&state->nameFieldComponent, context, labelColor, textColor, placeholderColor);
 
     // Connect button
     MenuButtonDraw(&state->connectButtonComponent, context, state->mouseX, state->mouseY, state->connectButtonComponent.enabled);
