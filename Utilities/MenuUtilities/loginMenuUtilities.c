@@ -7,14 +7,53 @@
 
 #include "Utilities/MenuUtilities/loginMenuUtilities.h"
 
+// Specs for the reusable components that make up the login screen.
+static const MenuInputFieldSpec kLoginIpFieldSpec = {
+    "Server IP",
+    "Ex: 127.0.0.1",
+    LOGIN_MENU_FIELD_HEIGHT,
+    LOGIN_MENU_FIELD_SPACING,
+    MENU_INPUT_FIELD_IP
+};
+
+static const MenuInputFieldSpec kLoginPortFieldSpec = {
+    "Server Port",
+    "Ex: 22311",
+    LOGIN_MENU_FIELD_HEIGHT,
+    LOGIN_MENU_FIELD_SPACING,
+    MENU_INPUT_FIELD_INT
+};
+
+static const char *kLoginButtonLabel = "Connect";
+
+/**
+ * Initializes component instances so the screen can be composed from primitives.
+ * @param state Pointer to the LoginMenuUIState to initialize components for.
+ */
+static void LoginMenuInitComponents(LoginMenuUIState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    MenuInputFieldInitialize(&state->ipFieldComponent, &kLoginIpFieldSpec,
+        state->ipBuffer, sizeof(state->ipBuffer), &state->ipLength);
+    MenuInputFieldInitialize(&state->portFieldComponent, &kLoginPortFieldSpec,
+        state->portBuffer, sizeof(state->portBuffer), &state->portLength);
+    MenuButtonInitialize(&state->connectButtonComponent, kLoginButtonLabel,
+        240.0f, LOGIN_MENU_BUTTON_HEIGHT);
+}
+
 /**
  * Computes the fixed height of the login menu panel.
  * @return The computed panel height in pixels.
  */
-static float LoginMenuPanelHeight(void) {
-    // The login menu is just two fields plus button plus padding.
-    return 2.0f * (LOGIN_MENU_FIELD_HEIGHT + LOGIN_MENU_FIELD_SPACING) +
-        LOGIN_MENU_BUTTON_HEIGHT + 2.0f * LOGIN_MENU_PANEL_PADDING;
+static float LoginMenuPanelHeight(const LoginMenuUIState *state) {
+    (void)state;
+    // Panel height is padding + field stack + button + padding.
+    return LOGIN_MENU_PANEL_PADDING +
+        kLoginIpFieldSpec.height + kLoginIpFieldSpec.spacingBelow +
+        kLoginPortFieldSpec.height + kLoginPortFieldSpec.spacingBelow +
+        LOGIN_MENU_BUTTON_HEIGHT + LOGIN_MENU_PANEL_PADDING;
 }
 
 /**
@@ -24,41 +63,14 @@ static float LoginMenuPanelHeight(void) {
  * @return The computed content height in pixels.
  */
 static float LoginMenuContentHeight(const LoginMenuUIState *state) {
-    // Get the panel height first.
-    float height = LoginMenuPanelHeight();
+    float height = LoginMenuPanelHeight(state);
 
-    // Then add the padding for status message if present.
+    // Status text sits below the panel and needs vertical breathing room.
     float statusPadding = MENU_GENERIC_TEXT_HEIGHT;
     if (state != NULL && state->statusMessage[0] != '\0') {
         statusPadding += MENU_GENERIC_TEXT_HEIGHT;
     }
     return height + statusPadding;
-}
-
-/**
- * Computes the base Y position for the login menu panel
- * to center it vertically within the viewport if possible.
- * @param contentHeight The total content height of the login menu UI.
- * @param viewportHeight The height of the viewport.
- * @return The computed base Y position in pixels.
- */
-static float LoginMenuBaseY(float contentHeight, float viewportHeight) {
-    // If viewport height is non-positive, just return a default offset.
-    if (viewportHeight <= 0.0f) {
-        return 16.0f;
-    }
-
-    // If content fits within the viewport, center it vertically.
-    if (contentHeight <= viewportHeight) {
-        float centered = (viewportHeight - contentHeight) * 0.5f;
-        // Clamp to the default minimum offset.
-        if (centered < 16.0f) {
-            centered = 16.0f;
-        }
-        return centered;
-    }
-
-    return 16.0f;
 }
 
 /**
@@ -74,21 +86,8 @@ static float LoginMenuClampScroll(LoginMenuUIState *state, float viewportHeight)
         return 0.0f;
     }
 
-    // The maximum scroll offset is content height minus viewport height
-    // (ensuring we don't scroll past the bottom).
-    float maxScroll = LoginMenuContentHeight(state) - viewportHeight;
-    if (maxScroll < 0.0f) {
-        maxScroll = 0.0f;
-    }
-
-    // Clamp the current scroll offset within [0, maxScroll].
-    float clamped = state->scrollOffset;
-    if (clamped < 0.0f) {
-        clamped = 0.0f;
-    }
-    if (clamped > maxScroll) {
-        clamped = maxScroll;
-    }
+    float contentHeight = LoginMenuContentHeight(state);
+    float clamped = MenuLayoutClampScroll(contentHeight, viewportHeight, state->scrollOffset);
 
     // Update the state with the clamped value.
     state->scrollOffset = clamped;
@@ -96,24 +95,22 @@ static float LoginMenuClampScroll(LoginMenuUIState *state, float viewportHeight)
 }
 
 /**
- * Helper function to compute the layout of the login menu UI elements
- * based on the current window size. Will seek to center the elements
- * and size them appropriately.
+ * Computes layout rectangles for the login menu UI elements.
+ * @param state Pointer to the LoginMenuUIState.
  * @param width The width of the window.
  * @param height The height of the window.
- * @param panel Output parameter for the panel rectangle.
- * @param ipField Output parameter for the IP field rectangle.
- * @param portField Output parameter for the port field rectangle.
- * @param button Output parameter for the connect button rectangle.
+ * @param scrollOffset Current scroll offset.
+ * @param panelOut Optional output for the panel rectangle.
  */
-static void LoginMenuUIComputeLayout(const LoginMenuUIState *state,
+static void LoginMenuLayout(LoginMenuUIState *state,
     int width,
     int height,
     float scrollOffset,
-    MenuUIRect *panel,
-    MenuUIRect *ipField,
-    MenuUIRect *portField,
-    MenuUIRect *button) {
+    MenuUIRect *panelOut) {
+    if (state == NULL) {
+        return;
+    }
+
     // We try to ensure width and height are at least 1.0f
     // to avoid weirdness with very small windows or zero division, etc.
     float w = (float)width;
@@ -133,102 +130,47 @@ static void LoginMenuUIComputeLayout(const LoginMenuUIState *state,
     if (fieldWidth < 220.0f) {
         fieldWidth = 220.0f;
     }
-    
-    // Compute button width based on field width.
-    float buttonWidth = fminf(fieldWidth, 240.0f);
 
     // Compute total content height.
     float contentHeight = LoginMenuContentHeight(state);
 
     // Compute positions to center the elements.
     float centerX = w * 0.5f;
-    float baseY = LoginMenuBaseY(contentHeight, h);
+    float baseY = MenuLayoutComputeBaseY(contentHeight, h);
     float panelTop = baseY - scrollOffset;
-    float startY = panelTop + LOGIN_MENU_PANEL_PADDING;
+    float innerX = centerX - fieldWidth * 0.5f;
+    float cursorY = panelTop + LOGIN_MENU_PANEL_PADDING;
 
-    // Output the rectangles if requested.
-    if (ipField != NULL) {
-        float x = centerX - fieldWidth * 0.5f;
-        *ipField = MenuUIRectMake(x, startY, fieldWidth, LOGIN_MENU_FIELD_HEIGHT);
-    }
+    // Layout the input fields and button.
+    MenuInputFieldLayout(&state->ipFieldComponent, innerX, cursorY, fieldWidth);
+    cursorY += kLoginIpFieldSpec.height + kLoginIpFieldSpec.spacingBelow;
 
-    if (portField != NULL) {
-        float x = centerX - fieldWidth * 0.5f;
-        float y = startY + LOGIN_MENU_FIELD_HEIGHT + LOGIN_MENU_FIELD_SPACING;
-        *portField = MenuUIRectMake(x, y, fieldWidth, LOGIN_MENU_FIELD_HEIGHT);
-    }
+    MenuInputFieldLayout(&state->portFieldComponent, innerX, cursorY, fieldWidth);
+    cursorY += kLoginPortFieldSpec.height + kLoginPortFieldSpec.spacingBelow;
 
-    if (button != NULL) {
-        float x = centerX - buttonWidth * 0.5f;
-        float y = startY + 2.0f * (LOGIN_MENU_FIELD_HEIGHT + LOGIN_MENU_FIELD_SPACING);
-        *button = MenuUIRectMake(x, y, buttonWidth, LOGIN_MENU_BUTTON_HEIGHT);
-    }
+    MenuButtonLayout(&state->connectButtonComponent, innerX, cursorY, fieldWidth);
 
-    // Finally, output the panel rectangle if requested.
-    if (panel != NULL) {
-        float top = startY - LOGIN_MENU_PANEL_PADDING;
-        float bottom = startY + 2.0f * (LOGIN_MENU_FIELD_HEIGHT + LOGIN_MENU_FIELD_SPACING) + LOGIN_MENU_BUTTON_HEIGHT + LOGIN_MENU_PANEL_PADDING;
-        float panelHeight = bottom - top;
+    if (panelOut != NULL) {
         float panelWidth = fieldWidth + LOGIN_MENU_PANEL_PADDING * 2.0f;
-        float x = centerX - panelWidth * 0.5f;
-        *panel = MenuUIRectMake(x, top, panelWidth, panelHeight);
+        float panelHeight = LoginMenuPanelHeight(state);
+        float panelX = centerX - panelWidth * 0.5f;
+        *panelOut = MenuUIRectMake(panelX, panelTop, panelWidth, panelHeight);
     }
 }
 
 /**
- * Helper function to backspace (remove last character)
- * from a specified input field in the login menu UI state.
- * @param state Pointer to the LoginMenuUIState.
- * @param target The focus target indicating which field to backspace.
+ * Helper to keep focus state synchronized between the enum and the components.
+ * @param state Pointer to the LoginMenuUIState to modify.
+ * @param target Desired focus target.
  */
-static void LoginMenuUIBackspaceField(LoginMenuUIState *state, LoginMenuFocusTarget target) {
-    // Nothing to backspace if state is null.
+static void LoginMenuSetFocus(LoginMenuUIState *state, LoginMenuFocusTarget target) {
     if (state == NULL) {
         return;
     }
 
-    // Backspace the appropriate field
-    // depending on the target.
-    if (target == LOGIN_MENU_FOCUS_IP) {
-        if (state->ipLength > 0) {
-            state->ipLength--;
-            state->ipBuffer[state->ipLength] = '\0';
-        }
-    } else if (target == LOGIN_MENU_FOCUS_PORT) {
-        if (state->portLength > 0) {
-            state->portLength--;
-            state->portBuffer[state->portLength] = '\0';
-        }
-    }
-}
-
-/**
- * Helper function to append a character
- * to a specified input field in the login menu UI state.
- * @param state Pointer to the LoginMenuUIState.
- * @param target The focus target indicating which field to append to.
- * @param value The character to append.
- */
-static void LoginMenuUIAppendToField(LoginMenuUIState *state, LoginMenuFocusTarget target, char value) {
-    // Nothing to append to if state is null.
-    if (state == NULL) {
-        return;
-    }
-
-    // Append to the appropriate field.
-    if (target == LOGIN_MENU_FOCUS_IP) {
-        if (state->ipLength >= LOGIN_MENU_IP_MAX_LENGTH) {
-            return;
-        }
-        state->ipBuffer[state->ipLength++] = value;
-        state->ipBuffer[state->ipLength] = '\0';
-    } else if (target == LOGIN_MENU_FOCUS_PORT) {
-        if (state->portLength >= LOGIN_MENU_PORT_MAX_LENGTH) {
-            return;
-        }
-        state->portBuffer[state->portLength++] = value;
-        state->portBuffer[state->portLength] = '\0';
-    }
+    state->focus = target;
+    MenuInputFieldSetFocus(&state->ipFieldComponent, target == LOGIN_MENU_FOCUS_IP);
+    MenuInputFieldSetFocus(&state->portFieldComponent, target == LOGIN_MENU_FOCUS_PORT);
 }
 
 /**
@@ -236,7 +178,6 @@ static void LoginMenuUIAppendToField(LoginMenuUIState *state, LoginMenuFocusTarg
  * @param state Pointer to the LoginMenuUIState to initialize.
  */
 void LoginMenuUIInitialize(LoginMenuUIState *state) {
-    // If state is null, we don't have a good pointer to initialize.
     if (state == NULL) {
         return;
     }
@@ -244,8 +185,10 @@ void LoginMenuUIInitialize(LoginMenuUIState *state) {
     // Zero out the entire structure.
     memset(state, 0, sizeof(*state));
 
-    // Set initial focus.
-    state->focus = LOGIN_MENU_FOCUS_NONE;
+    // Initialize components and set default focus.
+    LoginMenuInitComponents(state);
+    LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_NONE);
+    state->connectButtonComponent.enabled = true;
 
     // Prepare default status message.
     LoginMenuUISetStatusMessage(state, "Enter the server IP and port, then click Connect.");
@@ -291,28 +234,28 @@ void LoginMenuUIHandleMouseDown(LoginMenuUIState *state, float x, float y, int w
 
     // Compute the layout to determine element positions.
     MenuUIRect panel;
-    MenuUIRect ipField;
-    MenuUIRect portField;
-    MenuUIRect button;
-    LoginMenuUIComputeLayout(state, width, height, scrollOffset, &panel, &ipField, &portField, &button);
+    LoginMenuLayout(state, width, height, scrollOffset, &panel);
 
     // Now that we know the element positions,
     // we can update focus and button states
     // based on where the mouse was clicked.
-
-    if (MenuUIRectContains(&ipField, x, y)) {
-        state->focus = LOGIN_MENU_FOCUS_IP;
-    } else if (MenuUIRectContains(&portField, x, y)) {
-        state->focus = LOGIN_MENU_FOCUS_PORT;
-    } else if (!MenuUIRectContains(&panel, x, y)) {
-        state->focus = LOGIN_MENU_FOCUS_NONE;
-    }
-
-    if (MenuUIRectContains(&button, x, y)) {
-        state->connectButtonPressed = true;
-    } else {
+    
+    if (!MenuUIRectContains(&panel, x, y)) {
+        LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_NONE);
         state->connectButtonPressed = false;
+        state->connectButtonComponent.pressed = false;
+        return;
     }
+
+    if (MenuUIRectContains(&state->ipFieldComponent.rect, x, y)) {
+        LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_IP);
+    } else if (MenuUIRectContains(&state->portFieldComponent.rect, x, y)) {
+        LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_PORT);
+    } else {
+        LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_NONE);
+    }
+
+    state->connectButtonPressed = MenuButtonHandleMouseDown(&state->connectButtonComponent, x, y);
 }
 
 /**
@@ -335,17 +278,15 @@ void LoginMenuUIHandleMouseUp(LoginMenuUIState *state, float x, float y, int wid
 
     // Ensure scroll offset is within the proper bounds.
     float scrollOffset = LoginMenuClampScroll(state, (float)height);
+    LoginMenuLayout(state, width, height, scrollOffset, NULL);
 
-    // Only the button matters on mouse up.
-    MenuUIRect button;
-    LoginMenuUIComputeLayout(state, width, height, scrollOffset, NULL, NULL, NULL, &button);
+    // If the button was released over the button, we consider it activated.
 
-    // If the button was pressed and the mouse is still over it,
-    // we register a connect request.
-    bool wasPressed = state->connectButtonPressed;
-    state->connectButtonPressed = false;
+    bool activated = false;
+    MenuButtonHandleMouseUp(&state->connectButtonComponent, x, y, &activated);
+    state->connectButtonPressed = state->connectButtonComponent.pressed;
 
-    if (wasPressed && MenuUIRectContains(&button, x, y)) {
+    if (activated) {
         state->connectRequested = true;
     }
 }
@@ -381,24 +322,13 @@ void LoginMenuUIHandleChar(LoginMenuUIState *state, unsigned int codepoint) {
         return;
     }
 
-    // Only process printable ASCII characters for now.
-    if (codepoint < 32u || codepoint > 126u) {
-        return;
-    }
-
-    char value = (char)codepoint;
-
     // We only append to the field that is currently focused.
     // For the IP field, we allow digits and dots.
     // For the port field, we allow only digits.
     if (state->focus == LOGIN_MENU_FOCUS_IP) {
-        if (isdigit((unsigned char)value) || value == '.') {
-            LoginMenuUIAppendToField(state, LOGIN_MENU_FOCUS_IP, value);
-        }
+        MenuInputFieldHandleChar(&state->ipFieldComponent, codepoint);
     } else if (state->focus == LOGIN_MENU_FOCUS_PORT) {
-        if (isdigit((unsigned char)value)) {
-            LoginMenuUIAppendToField(state, LOGIN_MENU_FOCUS_PORT, value);
-        }
+        MenuInputFieldHandleChar(&state->portFieldComponent, codepoint);
     }
 }
 
@@ -421,17 +351,21 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
         // (imagine as having a cursor locked to the end of the field).
         case VK_BACK:
         case VK_DELETE:
-            LoginMenuUIBackspaceField(state, state->focus);
+            if (state->focus == LOGIN_MENU_FOCUS_IP) {
+                MenuInputFieldHandleBackspace(&state->ipFieldComponent);
+            } else if (state->focus == LOGIN_MENU_FOCUS_PORT) {
+                MenuInputFieldHandleBackspace(&state->portFieldComponent);
+            }
             break;
 
         // Tab switches focus between fields.
         case VK_TAB:
             if (state->focus == LOGIN_MENU_FOCUS_IP) {
-                state->focus = shiftDown ? LOGIN_MENU_FOCUS_NONE : LOGIN_MENU_FOCUS_PORT;
+                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_NONE : LOGIN_MENU_FOCUS_PORT);
             } else if (state->focus == LOGIN_MENU_FOCUS_PORT) {
-                state->focus = shiftDown ? LOGIN_MENU_FOCUS_IP : LOGIN_MENU_FOCUS_NONE;
+                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_IP : LOGIN_MENU_FOCUS_NONE);
             } else {
-                state->focus = shiftDown ? LOGIN_MENU_FOCUS_PORT : LOGIN_MENU_FOCUS_IP;
+                LoginMenuSetFocus(state, shiftDown ? LOGIN_MENU_FOCUS_PORT : LOGIN_MENU_FOCUS_IP);
             }
             break;
 
@@ -443,8 +377,9 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
             break;
         // Escape clears focus.
         case VK_ESCAPE:
-            state->focus = LOGIN_MENU_FOCUS_NONE;
+            LoginMenuSetFocus(state, LOGIN_MENU_FOCUS_NONE);
             break;
+
         default:
             // Other keys are not handled here.
             break;
@@ -452,7 +387,7 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
 }
 
 /**
- * Consumes a connect request from the  login menu UI, if one exists.
+ * Consumes a connect request from the login menu UI, if one exists.
  * Copies the IP address and port to the provided output buffers.
  * @param state Pointer to the LoginMenuUIState.
  * @param ipOut Output buffer for the IP address.
@@ -461,7 +396,12 @@ void LoginMenuUIHandleKeyDown(LoginMenuUIState *state, WPARAM key, bool shiftDow
  * @param portCapacity Capacity of the port output buffer.
  * @return True if a connect request was consumed, false otherwise.
  */
-bool LoginMenuUIConsumeConnectRequest(LoginMenuUIState *state, char *ipOut, size_t ipCapacity, char *portOut, size_t portCapacity) {
+bool LoginMenuUIConsumeConnectRequest(LoginMenuUIState *state,
+    char *ipOut,
+    size_t ipCapacity,
+    char *portOut,
+    size_t portCapacity) {
+
     // If state or output buffers are null, we can't proceed.
     if (state == NULL || ipOut == NULL || portOut == NULL) {
         return false;
@@ -531,10 +471,7 @@ void LoginMenuUIDraw(LoginMenuUIState *state, OpenGLContext *context, int width,
 
     // We retrieve rectangles for all UI elements.
     MenuUIRect panel;
-    MenuUIRect ipField;
-    MenuUIRect portField;
-    MenuUIRect button;
-    LoginMenuUIComputeLayout(state, width, height, scrollOffset, &panel, &ipField, &portField, &button);
+    LoginMenuLayout(state, width, height, scrollOffset, &panel);
 
     // Draw the panel background as a semi-transparent, outlined rectangle.
 
@@ -551,108 +488,21 @@ void LoginMenuUIDraw(LoginMenuUIState *state, OpenGLContext *context, int width,
     const float textColor[4] = MENU_INPUT_TEXT_COLOR;
     const float placeholderColor[4] = MENU_PLACEHOLDER_TEXT_COLOR;
 
-    // IP Field
+    // IP field
+    MenuInputFieldDraw(&state->ipFieldComponent, context, labelColor, textColor, placeholderColor);
 
-    float ipOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
-    
-    // If focused, we change the outline color to let
-    // the user know.
-    if (state->focus == LOGIN_MENU_FOCUS_IP) {
-        ipOutline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
-    }
+    // Port field
+    MenuInputFieldDraw(&state->portFieldComponent, context, labelColor, textColor, placeholderColor);
 
-    float ipFill[4] = MENU_INPUT_BOX_FILL_COLOR;
-    DrawOutlinedRectangle(ipField.x, ipField.y, ipField.x + ipField.width, ipField.y + ipField.height, ipOutline, ipFill);
-
-    // We just want to draw the label slightly above the field.
-    const char *ipLabel = "Server IP";
-    float ipLabelX = ipField.x;
-    float ipLabelY = ipField.y - 4.0f;
-    DrawScreenText(context, ipLabel, ipLabelX, ipLabelY, MENU_LABEL_TEXT_HEIGHT, MENU_LABEL_TEXT_WIDTH, labelColor);
-
-    // Draw the current IP or placeholder.
-    // We want to center the IP text in the field vertically,
-    // while having it only a little bit in from the left horizontally.
-    if (state->ipLength > 0) {
-        float ipTextX = ipField.x + 4.0f;
-        float ipTextY = ipField.y + (ipField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
-        DrawScreenText(context, state->ipBuffer, ipTextX, ipTextY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, textColor);
-    } else {
-        const char *ipPlaceholderText = "Ex: 127.0.0.1";
-        float placeholderX = ipField.x + 4.0f;
-        float placeholderY = ipField.y + (ipField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
-        DrawScreenText(context, ipPlaceholderText, placeholderX, placeholderY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, placeholderColor);
-    }
-
-    // Port Field
-
-    float portOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
-
-    // If focused, let the user know.
-    if (state->focus == LOGIN_MENU_FOCUS_PORT) {
-        portOutline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
-    }
-
-    float portFill[4] = MENU_INPUT_BOX_FILL_COLOR;
-    DrawOutlinedRectangle(portField.x, portField.y, portField.x + portField.width, portField.y + portField.height, portOutline, portFill);
-
-    const char *portLabel = "Server Port";
-
-    // We just want to draw the label slightly above the field.
-    float portLabelX = portField.x;
-    float portLabelY = portField.y - 4.0f;
-
-    DrawScreenText(context, portLabel, portLabelX, portLabelY, MENU_LABEL_TEXT_HEIGHT, MENU_LABEL_TEXT_WIDTH, labelColor);
-
-    // Draw the current port or placeholder.
-    // We want to center the port text in the field vertically,
-    // while having it only a little bit in from the left horizontally.
-    if (state->portLength > 0) {
-        float portTextX = portField.x + 4.0f;
-        float portTextY = portField.y + (portField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
-        DrawScreenText(context, state->portBuffer, portTextX, portTextY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, textColor);
-    } else {
-        const char *portPlaceholderText = "Ex: 22311";
-        float placeholderX = portField.x + 4.0f;
-        float placeholderY = portField.y + (portField.height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
-        DrawScreenText(context, portPlaceholderText, placeholderX, placeholderY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, placeholderColor);
-    }
-
-    // Connect Button
-
-    // Change appearance if hovered.
-    bool hover = MenuUIRectContains(&button, state->mouseX, state->mouseY);
-    
-    float buttonOutline[4] = MENU_BUTTON_OUTLINE_COLOR;
-
-    float *buttonFill = hover ? (float[])MENU_BUTTON_HOVER_FILL_COLOR : (float[])MENU_BUTTON_FILL_COLOR;
-
-    DrawOutlinedRectangle(button.x, button.y, button.x + button.width, button.y + button.height, buttonOutline, buttonFill);
-
-    // We want the text to be centered inside the panel.
-    // The height of the text is easy, it just comes from the constant.
-    // The width can be estimated based on character count and average character width.
-    const char *buttonText = "Connect";
-    float buttonTextWidth = strlen(buttonText) * MENU_BUTTON_TEXT_WIDTH;
-
-    // To center, we figure out how big the enclosing rectangle is,
-    // then since we have the text width and are giving the top left position,
-    // from which to begin drawing, we can just realize that half the width
-    // should be on either side of the center, and so the top left X position
-    // is the center minus half the text width:
-    float buttonTextX = button.x + (button.width / 2.0f) - (buttonTextWidth / 2.0f);
-
-    // To center vertically, we do the same thing but with height.
-    float buttonTextY = button.y + (button.height / 2.0f) + (MENU_BUTTON_TEXT_HEIGHT / 2.0f);
-
-    DrawScreenText(context, buttonText, buttonTextX, buttonTextY, MENU_BUTTON_TEXT_HEIGHT, MENU_BUTTON_TEXT_WIDTH, textColor);
+    // Connect button
+    MenuButtonDraw(&state->connectButtonComponent, context, state->mouseX, state->mouseY, state->connectButtonComponent.enabled);
 
     // Finally, draw the status message below the panel if it exists.
     // We want it horizontally centered below the panel,
     // and far enough below to not interfere with the panel.
     if (state->statusMessage[0] != '\0') {
-        float statusTextWidth = strlen(state->statusMessage) * MENU_GENERIC_TEXT_WIDTH;
-        float statusTextX = panel.x + (panel.width / 2.0f) - (statusTextWidth / 2.0f);
+        float statusTextWidth = (float)strlen(state->statusMessage) * MENU_GENERIC_TEXT_WIDTH;
+        float statusTextX = panel.x + (panel.width * 0.5f) - (statusTextWidth * 0.5f);
         float statusTextY = panel.y + panel.height + MENU_GENERIC_TEXT_HEIGHT;
         DrawScreenText(context, state->statusMessage, statusTextX, statusTextY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, labelColor);
     }

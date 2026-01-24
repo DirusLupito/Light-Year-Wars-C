@@ -6,43 +6,31 @@
  */
 #include "Utilities/MenuUtilities/lobbyMenuUtilities.h"
 
-// Note that each of the following field
-// definitions must correspond to the order of
-// the LobbyMenuFocusTarget enum values
-// and to each other.
-
-// Labels for each input field in the lobby menu.
-static const char *kFieldLabels[LOBBY_MENU_FIELD_COUNT] = {
-    "Planet Count",
-    "Faction Count",
-    "Min Fleet Capacity",
-    "Max Fleet Capacity",
-    "Level Width",
-    "Level Height",
-    "Random Seed"
+// Each field is described once here and reused for layout, validation, and rendering.
+static const MenuInputFieldSpec kFieldSpecs[LOBBY_MENU_FIELD_COUNT] = {
+    {"Planet Count", "Total number of planets", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_INT},
+    {"Faction Count", "Playable faction slots (2 - 16)", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_INT},
+    {"Min Fleet Capacity", "Minimum planet capacity", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_FLOAT},
+    {"Max Fleet Capacity", "Maximum planet capacity", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_FLOAT},
+    {"Level Width", "World width", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_FLOAT},
+    {"Level Height", "World height", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_FLOAT},
+    {"Random Seed", "Seed (0 for default)", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_INT}
 };
 
-// Placeholder text for each input field in the lobby menu.
-static const char *kFieldPlaceholders[LOBBY_MENU_FIELD_COUNT] = {
-    "Total number of planets",
-    "Playable faction slots (2 - 16)",
-    "Minimum planet capacity",
-    "Maximum planet capacity",
-    "World width",
-    "World height",
-    "Seed (0 for default)"
-};
-
-// Types of values for each input field in the lobby menu.
-static const LobbyMenuValueType kFieldTypes[LOBBY_MENU_FIELD_COUNT] = {
-    LOBBY_MENU_VALUE_INT,
-    LOBBY_MENU_VALUE_INT,
-    LOBBY_MENU_VALUE_FLOAT,
-    LOBBY_MENU_VALUE_FLOAT,
-    LOBBY_MENU_VALUE_FLOAT,
-    LOBBY_MENU_VALUE_FLOAT,
-    LOBBY_MENU_VALUE_INT
-};
+/**
+ * Computes the total vertical height occupied by the stacked input fields.
+ * @return Accumulated height including per-field spacing.
+ */
+static float LobbyMenuFieldsHeight(void) {
+    float height = 0.0f;
+    for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
+        height += kFieldSpecs[i].height;
+        if (i + 1 < LOBBY_MENU_FIELD_COUNT) {
+            height += kFieldSpecs[i].spacingBelow;
+        }
+    }
+    return height;
+}
 
 /**
  * Computes the height of the lobby menu panel based on its contents.
@@ -56,11 +44,8 @@ static float LobbyMenuComputePanelHeight(const LobbyMenuUIState *state) {
         return 0.0f;
     }
 
-    // Field height should just be number of fields times field height plus spacing.
-    float fieldsHeight = (float)LOBBY_MENU_FIELD_COUNT * LOBBY_MENU_FIELD_HEIGHT;
-    if (LOBBY_MENU_FIELD_COUNT > 1) {
-        fieldsHeight += (float)(LOBBY_MENU_FIELD_COUNT - 1) * LOBBY_MENU_FIELD_SPACING;
-    }
+    // Field height is driven by the spec table so any new field inherits sizing automatically.
+    float fieldsHeight = LobbyMenuFieldsHeight();
 
     // Likewise, slot height is number of slots times row height plus spacing.
     float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
@@ -73,9 +58,14 @@ static float LobbyMenuComputePanelHeight(const LobbyMenuUIState *state) {
         slotsHeight += ColorPickerUIHeight();
     }
 
+    float buttonHeight = LOBBY_MENU_BUTTON_HEIGHT;
+    if (state != NULL && state->startButton.height > 0.0f) {
+        buttonHeight = state->startButton.height;
+    }
+
     // So the overall height is the sum of all sections plus padding.
     return LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
-        LOBBY_MENU_BUTTON_HEIGHT + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
+        buttonHeight + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
 }
 
 /**
@@ -138,23 +128,8 @@ static float LobbyMenuClampScroll(LobbyMenuUIState *state, float viewportHeight)
         return 0.0f;
     }
 
-    // The maximum scroll offset is content height minus viewport height
-    // (ensuring we don't scroll past the bottom).
-    float maxScroll = LobbyMenuComputeContentHeight(state) - viewportHeight;
-    if (maxScroll < 0.0f) {
-        maxScroll = 0.0f;
-    }
-
-    // Clamp the current scroll offset within [0, maxScroll].
-    float clamped = state->scrollOffset;
-    if (clamped < 0.0f) {
-        clamped = 0.0f;
-    }
-    if (clamped > maxScroll) {
-        clamped = maxScroll;
-    }
-
-    // Update the state with the clamped value.
+    float contentHeight = LobbyMenuComputeContentHeight(state);
+    float clamped = MenuLayoutClampScroll(contentHeight, viewportHeight, state->scrollOffset);
     state->scrollOffset = clamped;
     return clamped;
 }
@@ -172,6 +147,22 @@ static int FocusToIndex(LobbyMenuFocusTarget focus) {
 
     // Otherwise, return the integer value of the focus target.
     return (int)focus;
+}
+
+/**
+ * Synchronizes the focused field between the enum and the component array.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param focus Desired focus target.
+ */
+static void LobbyMenuSetFocus(LobbyMenuUIState *state, LobbyMenuFocusTarget focus) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->focus = focus;
+    for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
+        MenuInputFieldSetFocus(&state->inputFields[i], focus == (LobbyMenuFocusTarget)i);
+    }
 }
 
 /**
@@ -193,6 +184,26 @@ static void SetFieldText(LobbyMenuUIState *state, size_t index, const char *text
 
     // Update the field length.
     state->fieldLength[index] = strlen(state->fieldText[index]);
+}
+
+/**
+ * Initializes all UI components so the lobby screen can be composed from primitives.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param editable True when inputs should start in an editable state.
+ */
+static void LobbyMenuInitComponents(LobbyMenuUIState *state, bool editable) {
+    if (state == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
+        MenuInputFieldInitialize(&state->inputFields[i], &kFieldSpecs[i],
+            state->fieldText[i], sizeof(state->fieldText[i]), &state->fieldLength[i]);
+        state->inputFields[i].editable = editable;
+    }
+
+    MenuButtonInitialize(&state->startButton, "Start Game", LOBBY_MENU_BUTTON_WIDTH, LOBBY_MENU_BUTTON_HEIGHT);
+    state->startButton.enabled = editable;
 }
 
 /**
@@ -258,13 +269,11 @@ static void ClampWindowDimensions(float *width, float *height) {
  * @param buttonOut Pointer to store the button rectangle, or NULL to ignore.
  * @param slotAreaOut Pointer to store the slot area rectangle, or NULL to ignore.
  */
-static void ComputeLayout(const LobbyMenuUIState *state,
+static void ComputeLayout(LobbyMenuUIState *state,
     int width,
     int height,
     float scrollOffset,
     MenuUIRect *panelOut,
-    MenuUIRect fieldRects[LOBBY_MENU_FIELD_COUNT],
-    MenuUIRect *buttonOut,
     MenuUIRect *slotAreaOut) {
 
     // Ensure valid window dimensions.
@@ -287,18 +296,8 @@ static void ComputeLayout(const LobbyMenuUIState *state,
     }
 
     // Now that we have panel width, calculate heights.
-    
-    // We want to calculate total height based on fields, button, slots, and padding.
 
-    // The overall height is:
-    //   top padding + fields height + button section spacing +
-    //   button height + section spacing + slots height + bottom padding
-    //   + any color picker height if open.
-
-    float fieldsHeight = (float)LOBBY_MENU_FIELD_COUNT * LOBBY_MENU_FIELD_HEIGHT;
-    if (LOBBY_MENU_FIELD_COUNT > 1) {
-        fieldsHeight += (float)(LOBBY_MENU_FIELD_COUNT - 1) * LOBBY_MENU_FIELD_SPACING;
-    }
+    float fieldsHeight = LobbyMenuFieldsHeight();
 
     float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
     if (state->slotCount > 1) {
@@ -310,7 +309,7 @@ static void ComputeLayout(const LobbyMenuUIState *state,
     }
 
     float panelHeight = LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
-        LOBBY_MENU_BUTTON_HEIGHT + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
+        state->startButton.height + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
 
 
     // Compute content height for centering calculations.
@@ -343,52 +342,24 @@ static void ComputeLayout(const LobbyMenuUIState *state,
     float innerWidth = panelWidth - 2.0f * LOBBY_MENU_PANEL_PADDING;
     float y = panelY + LOBBY_MENU_TOP_PADDING;
 
-    // Compute field rectangles if requested.
-    if (fieldRects != NULL) {
 
-        // These will be stacked vertically.
-        // These are where the user will type in
-        // data for the number of planets, factions, etc.
-        for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
-            fieldRects[i].x = innerX;
-            fieldRects[i].y = y;
-            fieldRects[i].width = innerWidth;
-            fieldRects[i].height = LOBBY_MENU_FIELD_HEIGHT;
-
-            y += LOBBY_MENU_FIELD_HEIGHT;
-            if (i + 1 < LOBBY_MENU_FIELD_COUNT) {
-                y += LOBBY_MENU_FIELD_SPACING;
-            }
+    // For each input field, compute its layout.
+    for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
+        MenuInputFieldLayout(&state->inputFields[i], innerX, y, innerWidth);
+        y += kFieldSpecs[i].height;
+        if (i + 1 < LOBBY_MENU_FIELD_COUNT) {
+            y += kFieldSpecs[i].spacingBelow;
         }
-    } else {
-        // If field rectangles are not requested, just advance y by the total fields height.
-        y += fieldsHeight;
     }
 
     // Compute button rectangle if requested.
     y += LOBBY_MENU_BUTTON_SECTION_SPACING;
-
-
-    // The button is centered within the inner width.
-    // It shall be located below the fields but above the player slots.
-
-    float buttonWidth = fminf(LOBBY_MENU_BUTTON_WIDTH, innerWidth);
-    float buttonX = innerX + (innerWidth - buttonWidth) * 0.5f;
-    if (buttonOut != NULL) {
-        buttonOut->x = buttonX;
-        buttonOut->y = y;
-        buttonOut->width = buttonWidth;
-        buttonOut->height = LOBBY_MENU_BUTTON_HEIGHT;
-    }
-
-    // Advance y past the button and section spacing.
-    y += LOBBY_MENU_BUTTON_HEIGHT + LOBBY_MENU_SECTION_SPACING;
-
-
+    MenuButtonLayout(&state->startButton, innerX, y, innerWidth);
+    y += state->startButton.height + LOBBY_MENU_SECTION_SPACING;
+    
     // Compute slot area rectangle if requested.
     // This rectangle will contain the list of lobby slots
     // for players/factions.
-    
     if (slotAreaOut != NULL) {
         slotAreaOut->x = innerX;
         slotAreaOut->y = y;
@@ -412,7 +383,8 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
     // Clear the state to default values.
     memset(state, 0, sizeof(*state));
     state->editable = editable;
-    state->focus = LOBBY_MENU_FOCUS_NONE;
+    LobbyMenuInitComponents(state, editable);
+    LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
     state->highlightedFactionId = -1;
 
     // Reset picker state so there is no stale interaction or pending commits.
@@ -440,10 +412,15 @@ void LobbyMenuUISetEditable(LobbyMenuUIState *state, bool editable) {
     }
 
     state->editable = editable;
+    for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
+        state->inputFields[i].editable = editable;
+    }
+    state->startButton.enabled = editable;
     if (!editable) {
         // If making read-only, clear focus and button states.
-        state->focus = LOBBY_MENU_FOCUS_NONE;
+        LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
         state->startButtonPressed = false;
+        state->startButton.pressed = false;
     }
 }
 
@@ -500,8 +477,9 @@ bool LobbyMenuUIGetSettings(LobbyMenuUIState *state, LobbyMenuGenerationSettings
         // Parse the value based on the expected type.
         char *endPtr = NULL;
 
-        // Currently, there are only int and float types.
-        if (kFieldTypes[i] == LOBBY_MENU_VALUE_INT) {
+        MenuInputFieldKind kind = kFieldSpecs[i].kind;
+
+        if (kind == MENU_INPUT_FIELD_INT) {
             // strtol returns a long
             long value = strtol(buffer, &endPtr, 10);
 
@@ -771,12 +749,10 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     float scrollOffset = LobbyMenuClampScroll(state, (float)height);
 
     MenuUIRect panel;
-    MenuUIRect fields[LOBBY_MENU_FIELD_COUNT];
-    MenuUIRect button;
     MenuUIRect slotArea;
 
     // Figure out where everything is laid out.
-    ComputeLayout(state, width, height, scrollOffset, &panel, fields, &button, &slotArea);
+    ComputeLayout(state, width, height, scrollOffset, &panel, &slotArea);
 
     // Handle color picker interactions first (independent of editability).
     bool clickedColorUI = false;
@@ -886,8 +862,9 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
 
     // If the click is outside the panel, clear focus and button states.
     if (!MenuUIRectContains(&panel, x, y)) {
-        state->focus = LOBBY_MENU_FOCUS_NONE;
+        LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
         state->startButtonPressed = false;
+        state->startButton.pressed = false;
         return;
     }
 
@@ -897,27 +874,24 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
         bool focusedField = false;
         for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
             // If the click is within this field, set focus to it.
-            if (MenuUIRectContains(&fields[i], x, y)) {
-                state->focus = (LobbyMenuFocusTarget)i;
+            if (MenuUIRectContains(&state->inputFields[i].rect, x, y)) {
+                LobbyMenuSetFocus(state, (LobbyMenuFocusTarget)i);
                 focusedField = true;
                 break;
             }
         }
 
         if (!focusedField) {
-            state->focus = LOBBY_MENU_FOCUS_NONE;
+            LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
         }
 
         // If the click is within the start button, mark it as pressed.
-        if (MenuUIRectContains(&button, x, y)) {
-            state->startButtonPressed = true;
-        } else {
-            state->startButtonPressed = false;
-        }
+        state->startButtonPressed = MenuButtonHandleMouseDown(&state->startButton, x, y);
     } else {
         // Otherwise, if not editable, clear focus and button states.
-        state->focus = LOBBY_MENU_FOCUS_NONE;
+        LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
         state->startButtonPressed = false;
+        state->startButton.pressed = false;
     }
 }
 
@@ -945,6 +919,7 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
     // If not editable, ignore any button presses.
     if (!state->editable) {
         state->startButtonPressed = false;
+        state->startButton.pressed = false;
         return;
     }
 
@@ -957,20 +932,17 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
     // We need to ensure that we've not scrolled above the top
     // or below the bottom of the content.
     float scrollOffset = LobbyMenuClampScroll(state, (float)height);
-    MenuUIRect button;
+    ComputeLayout(state, width, height, scrollOffset, NULL, NULL);
 
-    // Compute layout to find the button rectangle.
-    ComputeLayout(state, width, height, scrollOffset, NULL, NULL, &button, NULL);
-
-    // Then check if the mouse is still within the button.
-    if (MenuUIRectContains(&button, x, y)) {
+    bool activated = false;
+    MenuButtonHandleMouseUp(&state->startButton, x, y, &activated);
+    if (activated) {
         state->startRequested = true;
     }
 
-    // Clear the pressed state regardless.
-    // If the mouse winds up outside the button, we don't want it to stay pressed.
-    // Meanwhile, if it was inside, we've already marked startRequested.
+    // Clear the pressed state regardless of activation to avoid sticky input.
     state->startButtonPressed = false;
+    state->startButton.pressed = false;
 
     // We also need to ensure scroll offset is clamped
     // here because mouse up may have caused changes
@@ -1018,35 +990,7 @@ void LobbyMenuUIHandleChar(LobbyMenuUIState *state, unsigned int codepoint) {
         return;
     }
 
-    // Check if we have space to add another character.
-    if (state->fieldLength[index] >= sizeof(state->fieldText[index]) - 1) {
-        return;
-    }
-
-    // We now have both a valid field and space to add a character.
-    // Validate the character based on the field type.
-    char ch = (char)codepoint;
-    if (kFieldTypes[index] == LOBBY_MENU_VALUE_INT) {
-        // Integer fields only accept digits.
-        if (!isdigit((unsigned char)ch)) {
-            return;
-        }
-    } else {
-        // Float fields accept digits and at most one dot.
-        bool isDigit = isdigit((unsigned char)ch) != 0;
-        bool isDot = ch == '.';
-        if (!isDigit && !isDot) {
-            return;
-        }
-        if (isDot && strchr(state->fieldText[index], '.') != NULL) {
-            return;
-        }
-    }
-
-    // Append the character to the field text, updating length and null-termination accordingly.
-    state->fieldText[index][state->fieldLength[index]] = ch;
-    state->fieldLength[index] += 1;
-    state->fieldText[index][state->fieldLength[index]] = '\0';
+    MenuInputFieldHandleChar(&state->inputFields[index], codepoint);
 }
 
 /**
@@ -1067,9 +1011,8 @@ void LobbyMenuUIHandleKeyDown(LobbyMenuUIState *state, WPARAM key, bool shiftDow
     switch (key) {
         // Backspace deletes the last character in the focused field.
         case VK_BACK:
-            if (index >= 0 && state->fieldLength[index] > 0) {
-                state->fieldLength[index] -= 1;
-                state->fieldText[index][state->fieldLength[index]] = '\0';
+            if (index >= 0) {
+                MenuInputFieldHandleBackspace(&state->inputFields[index]);
             }
             break;
 
@@ -1088,7 +1031,7 @@ void LobbyMenuUIHandleKeyDown(LobbyMenuUIState *state, WPARAM key, bool shiftDow
             } else {
                 next = (next + 1) % (int)LOBBY_MENU_FIELD_COUNT;
             }
-            state->focus = (LobbyMenuFocusTarget)next;
+            LobbyMenuSetFocus(state, (LobbyMenuFocusTarget)next);
             break;
         }
 
@@ -1099,7 +1042,7 @@ void LobbyMenuUIHandleKeyDown(LobbyMenuUIState *state, WPARAM key, bool shiftDow
 
         // Escape clears focus.
         case VK_ESCAPE:
-            state->focus = LOBBY_MENU_FOCUS_NONE;
+            LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
             break;
             
         // No other actions for other keys.
@@ -1160,12 +1103,10 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
     float scrollOffset = LobbyMenuClampScroll(state, (float)height);
 
     MenuUIRect panel;
-    MenuUIRect fields[LOBBY_MENU_FIELD_COUNT];
-    MenuUIRect button;
     MenuUIRect slotArea;
 
-    // Figure out where everything is laid out.
-    ComputeLayout(state, width, height, scrollOffset, &panel, fields, &button, &slotArea);
+    // Figure out where everything is laid out and hydrate component rectangles.
+    ComputeLayout(state, width, height, scrollOffset, &panel, &slotArea);
 
     // Draw the main panel background.
     float panelOutline[4] = MENU_PANEL_OUTLINE_COLOR;
@@ -1178,61 +1119,11 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
     const float placeholderColor[4] = MENU_PLACEHOLDER_TEXT_COLOR;
 
     for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
-        const MenuUIRect *field = &fields[i];
-        float outline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
-
-        // Adjust outline alpha based on focus and editability.
-        if (state->focus == (LobbyMenuFocusTarget)i) {
-            outline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
-        } else if (!state->editable) {
-            outline[3] *= 0.45f;
-        }
-
-        // Fill color also adjusts based on editability.
-        float fill[4] = MENU_INPUT_BOX_FILL_COLOR;
-        if (!state->editable) {
-            fill[3] *= 0.6f;
-        }
-
-        DrawOutlinedRectangle(field->x, field->y, field->x + field->width, field->y + field->height, outline, fill);
-
-        // Draw the label above the field.
-        float labelY = field->y - 6.0f;
-        DrawScreenText(context, kFieldLabels[i], field->x, labelY, MENU_LABEL_TEXT_HEIGHT, MENU_LABEL_TEXT_WIDTH, labelColor);
-
-        // If the field has text, draw it; otherwise, draw the placeholder.
-        if (state->fieldLength[i] > 0) {
-            float textX = field->x + 6.0f;
-            float textY = field->y + (field->height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
-            DrawScreenText(context, state->fieldText[i], textX, textY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, textColor);
-        } else {
-            float placeholderX = field->x + 6.0f;
-            float placeholderY = field->y + (field->height / 2.0f) + (MENU_INPUT_TEXT_HEIGHT / 2.0f);
-            DrawScreenText(context, kFieldPlaceholders[i], placeholderX, placeholderY, MENU_INPUT_TEXT_HEIGHT, MENU_INPUT_TEXT_WIDTH, placeholderColor);
-        }
+        MenuInputFieldDraw(&state->inputFields[i], context, labelColor, textColor, placeholderColor);
     }
 
     // Draw the start game button.
-
-    // Check if the mouse is hovering over the button, and adjust colors accordingly.
-    bool hoverButton = MenuUIRectContains(&button, state->mouseX, state->mouseY);
-    float buttonOutline[4] = MENU_BUTTON_OUTLINE_COLOR;
-    float buttonFillHover[4] = MENU_BUTTON_HOVER_FILL_COLOR;
-    float buttonFillDefault[4] = MENU_BUTTON_FILL_COLOR;
-    float *buttonFill = hoverButton ? buttonFillHover : buttonFillDefault;
-    if (!state->editable) {
-        buttonFill[3] *= 0.6f;
-        buttonOutline[3] *= 0.6f;
-    }
-
-    DrawOutlinedRectangle(button.x, button.y, button.x + button.width, button.y + button.height, buttonOutline, buttonFill);
-
-    // Draw the button text centered within the button horizontally and vertically.
-    const char *buttonText = "Start Game";
-    float buttonTextWidth = (float)strlen(buttonText) * MENU_BUTTON_TEXT_WIDTH;
-    float buttonTextX = button.x + (button.width / 2.0f) - (buttonTextWidth / 2.0f);
-    float buttonTextY = button.y + (button.height / 2.0f) + (MENU_BUTTON_TEXT_HEIGHT / 2.0f);
-    DrawScreenText(context, buttonText, buttonTextX, buttonTextY, MENU_BUTTON_TEXT_HEIGHT, MENU_BUTTON_TEXT_WIDTH, textColor);
+    MenuButtonDraw(&state->startButton, context, state->mouseX, state->mouseY, state->startButton.enabled);
 
     // Draw the faction slots area.
     float slotsHeaderY = slotArea.y - 6.0f;

@@ -21,6 +21,7 @@
 #include "Utilities/renderUtilities.h"
 #include "Utilities/openglUtilities.h"
 #include "Utilities/MenuUtilities/commonMenuUtilities.h"
+#include "Utilities/MenuUtilities/menuComponentUtilities.h"
 #include "Utilities/MenuUtilities/colorPickerUtilities.h"
 
 // Maximum number of player slots in the lobby.
@@ -141,6 +142,10 @@ typedef struct LobbyMenuUIState {
 
     /* Color picker state for RGB selection. */
     ColorPickerUIState colorPicker;
+
+    /* Componentized primitives for fields and the start button. */
+    MenuInputFieldComponent inputFields[LOBBY_MENU_FIELD_COUNT];
+    MenuButtonComponent startButton;
 } LobbyMenuUIState;
 
 /**

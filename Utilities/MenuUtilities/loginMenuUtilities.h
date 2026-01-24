@@ -16,6 +16,7 @@
 
 #include "Utilities/renderUtilities.h"
 #include "Utilities/MenuUtilities/commonMenuUtilities.h"
+#include "Utilities/MenuUtilities/menuComponentUtilities.h"
 
 // Maximum length for the server IP address input field.
 // We only support IPv4 addresses for now, 
@@ -67,6 +68,11 @@ typedef struct LoginMenuUIState {
     float mouseX;
     float mouseY;
     float scrollOffset; /* Vertical scroll position for overflowing content. */
+
+    /* Componentized UI elements for reuse across screens. */
+    MenuInputFieldComponent ipFieldComponent;
+    MenuInputFieldComponent portFieldComponent;
+    MenuButtonComponent connectButtonComponent;
     char statusMessage[LOGIN_MENU_STATUS_MAX_LENGTH + 1];
 } LoginMenuUIState;
 
