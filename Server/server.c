@@ -37,6 +37,9 @@ static ServerStage currentStage = SERVER_STAGE_LOBBY;
 // Lobby UI state used while in the lobby stage.
 static LobbyMenuUIState lobbyMenuUI = {0};
 
+// Centralized preview context shared across lobby preview helpers.
+static LobbyPreviewContext lobbyPreview = {0};
+
 // Current lobby generation settings.
 // This also controls the default settings used when initializing a new lobby.
 static LobbyMenuGenerationSettings lobbySettings = {
@@ -270,6 +273,10 @@ static void InitializeLobbyState(void) {
 
     // Mark the lobby state as dirty to ensure it is (re)broadcasted.
     lobbyStateDirty = true;
+
+    // Reset preview state so the next preview reflects fresh lobby settings.
+    LobbyPreviewReset(&lobbyPreview);
+    LobbyMenuUISetPreviewOpen(&lobbyMenuUI, false);
 }
 
 /**
@@ -364,6 +371,9 @@ static void RefreshLobbySlots(void) {
 
     // Now clear any highlighted faction ID.
     LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, -1);
+
+    // Slot changes should be reflected in the preview so colors and occupancy stay aligned.
+    LobbyPreviewMarkDirty(&lobbyPreview);
 }
 
 /**
@@ -406,6 +416,7 @@ static void ApplyFactionColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t
     float color[4] = {rf, gf, bf, 1.0f};
     LobbyMenuUISetSlotColor(&lobbyMenuUI, (size_t)factionId, color);
     lobbyStateDirty = true;
+    LobbyPreviewMarkDirty(&lobbyPreview);
 }
 
 /**
@@ -539,6 +550,7 @@ static void ProcessLobbyUI(void) {
                     RefreshLobbySlots();
                 }
                 lobbyStateDirty = true;
+                LobbyPreviewMarkDirty(&lobbyPreview);
                 LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Adjust settings and press Start Game.");
             }
         }
@@ -687,6 +699,10 @@ static bool AttemptStartGame(void) {
     // Transition to the game stage.
     currentStage = SERVER_STAGE_GAME;
 
+    // Hide the preview panel once the game begins.
+    LobbyMenuUISetPreviewOpen(&lobbyMenuUI, false);
+    LobbyPreviewReset(&lobbyPreview);
+
     // Clear the lobby state dirty flag and update the UI.
     lobbyStateDirty = false;
     LobbyMenuUISetStatusMessage(&lobbyMenuUI, NULL);
@@ -762,6 +778,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
             // Then handle lobby UI interactions.
             if (currentStage == SERVER_STAGE_LOBBY) {
+                // The lobby preview may consume the mouse down event.
+                if (LobbyPreviewHandleMouseDown(&lobbyPreview, &lobbyMenuUI, window_handle, x, y, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleMouseDown(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
@@ -805,6 +826,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int y = (int)(short)HIWORD(lParam);
 
             if (currentStage == SERVER_STAGE_LOBBY) {
+                // The lobby preview may consume the mouse move event.
+                if (LobbyPreviewHandleMouseMove(&lobbyPreview, &lobbyMenuUI, x, y, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleMouseMove(&lobbyMenuUI, (float)x, (float)y);
             }
             return 0;
@@ -817,6 +843,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int y = (int)(short)HIWORD(lParam);
 
             if (currentStage == SERVER_STAGE_LOBBY) {
+                // The lobby preview may consume the mouse up event.
+                if (LobbyPreviewHandleMouseUp(&lobbyPreview, &lobbyMenuUI, window_handle, x, y, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleMouseUp(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
             }
             return 0;
@@ -845,6 +876,15 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
             // The mouse scrolls up/down to scroll the lobby menu up/down.
             if (currentStage == SERVER_STAGE_LOBBY) {
+                // Depending on where the mouse cursor is,
+                // the lobby preview may consume the mouse wheel event.
+                POINT cursor = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                ScreenToClient(window_handle, &cursor);
+                if (LobbyPreviewHandleMouseWheel(&lobbyPreview, &lobbyMenuUI, window_handle, wheelDelta,
+                        (int)cursor.x, (int)cursor.y, SERVER_CAMERA_ZOOM_FACTOR, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleScroll(&lobbyMenuUI, openglContext.height, wheelSteps);
                 return 0;
             }
@@ -1536,6 +1576,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     CameraInitialize(&cameraState);
     cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
     cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
+    LobbyPreviewInitialize(&lobbyPreview, SERVER_CAMERA_MIN_ZOOM, SERVER_CAMERA_MAX_ZOOM);
     InitializeLobbyState();
 
     printf("Entering main program loop...\n");
@@ -1703,6 +1744,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             LevelUpdate(&level, delta_time);
         } else {
             ProcessLobbyUI();
+            LobbyPreviewUpdate(&lobbyPreview,
+                &lobbyMenuUI,
+                &lobbySettings,
+                true,
+                lobbyMenuUI.slotColors,
+                lobbyMenuUI.slotColorValid,
+                lobbyMenuUI.slotCount,
+                window_handle,
+                delta_time,
+                SERVER_CAMERA_EDGE_MARGIN,
+                SERVER_CAMERA_EDGE_SPEED,
+                &openglContext);
         }
 
         // Update player timeouts with the elapsed time.
@@ -1785,9 +1838,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 }
             }
 
-            // We only need to draw the lobby UI if we are in the lobby stage.
+            // We only need to draw the lobby UI elements if we are in the lobby stage.
             if (currentStage == SERVER_STAGE_LOBBY) {
                 LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
+                LobbyPreviewRender(&lobbyPreview, &lobbyMenuUI, &openglContext);
             }
 
             // Display FPS in the top-left corner
@@ -1818,6 +1872,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     server_socket = INVALID_SOCKET;
     WSACleanup();
     LevelRelease(&level);
+    LobbyPreviewRelease(&lobbyPreview);
     OpenGLShutdownForWindow(&openglContext, window_handle);
     return EXIT_SUCCESS;
 }

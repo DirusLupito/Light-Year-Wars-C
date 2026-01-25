@@ -17,6 +17,10 @@ static const MenuInputFieldSpec kFieldSpecs[LOBBY_MENU_FIELD_COUNT] = {
     {"Random Seed", "Seed (0 for default)", LOBBY_MENU_FIELD_HEIGHT, LOBBY_MENU_FIELD_SPACING, MENU_INPUT_FIELD_INT}
 };
 
+// Labels for the preview toggle button.
+static const char *kPreviewButtonLabelOpen = "Preview Level";
+static const char *kPreviewButtonLabelClose = "Close Preview";
+
 /**
  * Computes the total vertical height occupied by the stacked input fields.
  * @return Accumulated height including per-field spacing.
@@ -63,9 +67,16 @@ static float LobbyMenuComputePanelHeight(const LobbyMenuUIState *state) {
         buttonHeight = state->startButton.height;
     }
 
+    // The preview button sits below the start button, so we add its height and spacing.
+    float previewButtonHeight = LOBBY_MENU_PREVIEW_BUTTON_HEIGHT;
+    if (state != NULL && state->previewButton.height > 0.0f) {
+        previewButtonHeight = state->previewButton.height;
+    }
+    float buttonsHeight = buttonHeight + LOBBY_MENU_PREVIEW_BUTTON_SPACING + previewButtonHeight;
+
     // So the overall height is the sum of all sections plus padding.
     return LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
-        buttonHeight + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
+        buttonsHeight + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
 }
 
 /**
@@ -204,6 +215,24 @@ static void LobbyMenuInitComponents(LobbyMenuUIState *state, bool editable) {
 
     MenuButtonInitialize(&state->startButton, "Start Game", LOBBY_MENU_BUTTON_WIDTH, LOBBY_MENU_BUTTON_HEIGHT);
     state->startButton.enabled = editable;
+
+    // Preview button is always enabled so users can toggle the preview in read-only lobbies.
+    MenuButtonInitialize(&state->previewButton, kPreviewButtonLabelOpen,
+        LOBBY_MENU_PREVIEW_BUTTON_WIDTH, LOBBY_MENU_PREVIEW_BUTTON_HEIGHT);
+    state->previewButton.enabled = true;
+}
+
+/**
+ * Updates the preview button label based on the current open state.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ */
+static void LobbyMenuUpdatePreviewButtonLabel(LobbyMenuUIState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    // We swap the label so users understand whether the preview will open or close.
+    state->previewButton.label = state->previewOpen ? kPreviewButtonLabelClose : kPreviewButtonLabelOpen;
 }
 
 /**
@@ -309,7 +338,8 @@ static void ComputeLayout(LobbyMenuUIState *state,
     }
 
     float panelHeight = LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
-        state->startButton.height + LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
+        state->startButton.height + LOBBY_MENU_PREVIEW_BUTTON_SPACING + state->previewButton.height +
+        LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
 
 
     // Compute content height for centering calculations.
@@ -355,7 +385,9 @@ static void ComputeLayout(LobbyMenuUIState *state,
     // Compute button rectangle if requested.
     y += LOBBY_MENU_BUTTON_SECTION_SPACING;
     MenuButtonLayout(&state->startButton, innerX, y, innerWidth);
-    y += state->startButton.height + LOBBY_MENU_SECTION_SPACING;
+    y += state->startButton.height + LOBBY_MENU_PREVIEW_BUTTON_SPACING;
+    MenuButtonLayout(&state->previewButton, innerX, y, innerWidth);
+    y += state->previewButton.height + LOBBY_MENU_SECTION_SPACING;
     
     // Compute slot area rectangle if requested.
     // This rectangle will contain the list of lobby slots
@@ -386,6 +418,9 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
     LobbyMenuInitComponents(state, editable);
     LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
     state->highlightedFactionId = -1;
+    state->previewOpen = false;
+    state->previewButtonPressed = false;
+    LobbyMenuUpdatePreviewButtonLabel(state);
 
     // Reset picker state so there is no stale interaction or pending commits.
     ColorPickerUIInitialize(&state->colorPicker);
@@ -422,6 +457,108 @@ void LobbyMenuUISetEditable(LobbyMenuUIState *state, bool editable) {
         state->startButtonPressed = false;
         state->startButton.pressed = false;
     }
+}
+
+/**
+ * Returns whether the lobby preview panel is currently open.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @return True if the preview is open, false otherwise.
+ */
+bool LobbyMenuUIIsPreviewOpen(const LobbyMenuUIState *state) {
+    if (state == NULL) {
+        return false;
+    }
+
+    return state->previewOpen;
+}
+
+/**
+ * Sets whether the lobby preview panel is open.
+ * Updates the preview button label accordingly.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param open True to open the preview, false to close it.
+ */
+void LobbyMenuUISetPreviewOpen(LobbyMenuUIState *state, bool open) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->previewOpen = open;
+    LobbyMenuUpdatePreviewButtonLabel(state);
+}
+
+/**
+ * Retrieves the computed main panel rectangle for the lobby menu.
+ * Useful for aligning external UI elements like the preview panel.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @param width Current width of the UI area.
+ * @param height Current height of the UI area.
+ * @param panelOut Output rectangle for the lobby panel.
+ * @return True if the panel rectangle was computed, false otherwise.
+ */
+bool LobbyMenuUIGetPanelRect(LobbyMenuUIState *state, int width, int height, MenuUIRect *panelOut) {
+    if (state == NULL || panelOut == NULL || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    // Clamp scroll so the panel is computed in a stable location.
+    float scrollOffset = LobbyMenuClampScroll(state, (float)height);
+    ComputeLayout(state, width, height, scrollOffset, panelOut, NULL);
+    return true;
+}
+
+/**
+ * Retrieves the computed preview panel rectangle aligned to the lobby panel.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @param width Current width of the UI area.
+ * @param height Current height of the UI area.
+ * @param previewOut Output rectangle for the preview panel.
+ * @return True if the preview rectangle was computed, false otherwise.
+ */
+bool LobbyMenuUIGetPreviewPanelRect(LobbyMenuUIState *state, int width, int height, MenuUIRect *previewOut) {
+    if (state == NULL || previewOut == NULL || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    MenuUIRect panel;
+    if (!LobbyMenuUIGetPanelRect(state, width, height, &panel)) {
+        return false;
+    }
+
+    // Compute available horizontal space to the right of the main panel.
+    // We measure this so the preview never overlaps the lobby panel.
+    float available = (float)width - (panel.x + panel.width) - LOBBY_MENU_PREVIEW_PANEL_MARGIN;
+    if (available <= 1.0f) {
+        return false;
+    }
+
+    // We want a square preview viewport, which means the panel width needs to
+    // match the panel height minus the header (padding cancels out).
+    float targetWidth = panel.height - LOBBY_MENU_PREVIEW_PANEL_HEADER_HEIGHT;
+
+    // Clamp the preview width to reasonable bounds while honoring available space.
+    // We prioritize the square target so the preview reads as a consistent window.
+    float previewWidth = targetWidth;
+    if (previewWidth > available) {
+        previewWidth = available;
+    }
+    if (previewWidth > LOBBY_MENU_PREVIEW_PANEL_MAX_WIDTH) {
+        previewWidth = LOBBY_MENU_PREVIEW_PANEL_MAX_WIDTH;
+    }
+    if (previewWidth < LOBBY_MENU_PREVIEW_PANEL_MIN_WIDTH) {
+        previewWidth = fminf(available, LOBBY_MENU_PREVIEW_PANEL_MIN_WIDTH);
+    }
+
+    // If the preview becomes too narrow, skip rendering to avoid layout overlap.
+    if (previewWidth < 80.0f) {
+        return false;
+    }
+
+    previewOut->x = panel.x + panel.width + LOBBY_MENU_PREVIEW_PANEL_MARGIN;
+    previewOut->y = panel.y;
+    previewOut->width = previewWidth;
+    previewOut->height = panel.height;
+    return true;
 }
 
 /**
@@ -876,8 +1013,16 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
         return;
     }
 
+    // Handle preview button regardless of editability so read-only clients can toggle it.
+    state->previewButtonPressed = MenuButtonHandleMouseDown(&state->previewButton, x, y);
+    if (state->previewButtonPressed) {
+        // Clear focus so the preview button press doesn't keep fields highlighted.
+        LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+        return;
+    }
+
     // If editable (the lobby is being modified by some authoritative user),
-    // check if any fields or the button were clicked.
+    // check if any fields or the start button were clicked.
     if (state->editable) {
         bool focusedField = false;
         for (size_t i = 0; i < LOBBY_MENU_FIELD_COUNT; ++i) {
@@ -924,7 +1069,19 @@ void LobbyMenuUIHandleMouseUp(LobbyMenuUIState *state, float x, float y, int wid
     // Stop any color slider dragging.
     ColorPickerUIEndDrag(&state->colorPicker);
 
-    // If not editable, ignore any button presses.
+    // Handle preview button release regardless of editability.
+    if (state->previewButtonPressed) {
+        bool previewActivated = false;
+        MenuButtonHandleMouseUp(&state->previewButton, x, y, &previewActivated);
+        if (previewActivated) {
+            state->previewOpen = !state->previewOpen;
+            LobbyMenuUpdatePreviewButtonLabel(state);
+        }
+        state->previewButtonPressed = false;
+        state->previewButton.pressed = false;
+    }
+
+    // If not editable, ignore any start button presses.
     if (!state->editable) {
         state->startButtonPressed = false;
         state->startButton.pressed = false;
@@ -1132,6 +1289,9 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
 
     // Draw the start game button.
     MenuButtonDraw(&state->startButton, context, state->mouseX, state->mouseY, state->startButton.enabled);
+
+    // Draw the preview toggle button.
+    MenuButtonDraw(&state->previewButton, context, state->mouseX, state->mouseY, state->previewButton.enabled);
 
     // Draw the faction slots area.
     float slotsHeaderY = slotArea.y - 6.0f;

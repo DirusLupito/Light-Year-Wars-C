@@ -61,6 +61,15 @@
 // Width of the start button in the lobby menu.
 #define LOBBY_MENU_BUTTON_WIDTH 260.0f
 
+// Height of the preview button in the lobby menu.
+#define LOBBY_MENU_PREVIEW_BUTTON_HEIGHT 44.0f
+
+// Width of the preview button in the lobby menu.
+#define LOBBY_MENU_PREVIEW_BUTTON_WIDTH 240.0f
+
+// Spacing between the start button and the preview button.
+#define LOBBY_MENU_PREVIEW_BUTTON_SPACING 12.0f
+
 // Spacing between the input fields and the button section.
 #define LOBBY_MENU_BUTTON_SECTION_SPACING 28.0f
 
@@ -72,6 +81,21 @@
 
 // Spacing between slot rows in the lobby menu.
 #define LOBBY_MENU_SLOT_ROW_SPACING 6.0f
+
+// Horizontal spacing between the lobby panel and preview panel.
+#define LOBBY_MENU_PREVIEW_PANEL_MARGIN 24.0f
+
+// Internal padding inside the preview panel.
+#define LOBBY_MENU_PREVIEW_PANEL_PADDING 12.0f
+
+// Height reserved for the preview panel header.
+#define LOBBY_MENU_PREVIEW_PANEL_HEADER_HEIGHT 26.0f
+
+// Minimum width of the preview panel to keep it legible.
+#define LOBBY_MENU_PREVIEW_PANEL_MIN_WIDTH 220.0f
+
+// Maximum width of the preview panel to avoid consuming the full screen.
+#define LOBBY_MENU_PREVIEW_PANEL_MAX_WIDTH 1000.0f
 
 
 /**
@@ -122,6 +146,8 @@ typedef struct LobbyMenuUIState {
     LobbyMenuFocusTarget focus; /* Currently focused field for keyboard input. */
     bool startButtonPressed; /* Tracks pressed state for mouse handling. */
     bool startRequested; /* Latched when the Start Game button is activated. */
+    bool previewButtonPressed; /* Tracks pressed state for preview button. */
+    bool previewOpen; /* True when the preview panel is visible. */
     float mouseX;
     float mouseY;
     float scrollOffset; /* Vertical scroll position for overflowing content. */
@@ -148,6 +174,7 @@ typedef struct LobbyMenuUIState {
     /* Componentized primitives for fields and the start button. */
     MenuInputFieldComponent inputFields[LOBBY_MENU_FIELD_COUNT];
     MenuButtonComponent startButton;
+    MenuButtonComponent previewButton;
 } LobbyMenuUIState;
 
 /**
@@ -165,6 +192,42 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable);
  * @param editable True to make inputs interactive, false for read-only.
  */
 void LobbyMenuUISetEditable(LobbyMenuUIState *state, bool editable);
+
+/**
+ * Returns whether the lobby preview panel is currently open.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @return True if the preview is open, false otherwise.
+ */
+bool LobbyMenuUIIsPreviewOpen(const LobbyMenuUIState *state);
+
+/**
+ * Sets whether the lobby preview panel is open.
+ * Updates the preview button label accordingly.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param open True to open the preview, false to close it.
+ */
+void LobbyMenuUISetPreviewOpen(LobbyMenuUIState *state, bool open);
+
+/**
+ * Retrieves the computed main panel rectangle for the lobby menu.
+ * Useful for aligning external UI elements like the preview panel.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @param width Current width of the UI area.
+ * @param height Current height of the UI area.
+ * @param panelOut Output rectangle for the lobby panel.
+ * @return True if the panel rectangle was computed, false otherwise.
+ */
+bool LobbyMenuUIGetPanelRect(LobbyMenuUIState *state, int width, int height, MenuUIRect *panelOut);
+
+/**
+ * Retrieves the computed preview panel rectangle aligned to the lobby panel.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @param width Current width of the UI area.
+ * @param height Current height of the UI area.
+ * @param previewOut Output rectangle for the preview panel.
+ * @return True if the preview rectangle was computed, false otherwise.
+ */
+bool LobbyMenuUIGetPreviewPanelRect(LobbyMenuUIState *state, int width, int height, MenuUIRect *previewOut);
 
 /**
  * Sets the current lobby generation settings in the UI state.

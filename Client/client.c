@@ -22,6 +22,9 @@ static LoginMenuUIState loginMenuUI = {0};
 // Tracks the state of the lobby UI once connected to the server.
 static LobbyMenuUIState lobbyMenuUI = {0};
 
+// Element of the lobby UI which handles showing a preview of the generated level.
+static LobbyPreviewContext lobbyPreview = {0};
+
 // -- Window and rendering variables --
 
 // Running = true while the main loop should continue
@@ -770,8 +773,12 @@ static void ResetConnectionToMenu(const char *statusMessage) {
     // Release the level data so stale state is not reused.
     LevelRelease(&level);
 
+    // Reset preview state so the next lobby session starts clean.
+    LobbyPreviewReset(&lobbyPreview);
+
     // Reset lobby UI to its default read-only state.
     LobbyMenuUIInitialize(&lobbyMenuUI, false);
+    LobbyMenuUISetPreviewOpen(&lobbyMenuUI, false);
 
     // Reset camera so menu rendering starts from a known state.
     cameraState.position = Vec2Zero();
@@ -931,6 +938,9 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
     LobbyMenuUISetColorEditAuthority(&lobbyMenuUI, false, assignedFactionId);
     LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Waiting for host to start game.");
 
+    // Mark the preview dirty so it regenerates with the new lobby state.
+    LobbyPreviewMarkDirty(&lobbyPreview);
+
     // If we are not already in the lobby stage, switch to it.
     if (currentStage != CLIENT_STAGE_LOBBY) {
         // Clean up any existing level state.
@@ -978,6 +988,10 @@ static void HandleStartGamePacketMessage(const uint8_t *data, size_t length) {
     boxSelectActive = false;
     boxSelectDragging = false;
     LevelRelease(&level);
+
+    // Hide the lobby preview once the game is starting.
+    LobbyMenuUISetPreviewOpen(&lobbyMenuUI, false);
+    LobbyPreviewReset(&lobbyPreview);
     localFaction = NULL;
     LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Loading game...");
 }
@@ -1386,6 +1400,7 @@ static void RenderFrame(float fps) {
         }
     } else if (currentStage == CLIENT_STAGE_LOBBY) {
         LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
+        LobbyPreviewRender(&lobbyPreview, &lobbyMenuUI, &openglContext);
     } else {
         // Can only reach here if we are in the login menu stage.
         // as the only other stages are game and lobby.
@@ -1471,6 +1486,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             if (currentStage == CLIENT_STAGE_LOBBY) {
+                // Depending on where the mouse is in the lobby,
+                // the lobby preview may consume the mouse down event.
+                if (LobbyPreviewHandleMouseDown(&lobbyPreview, &lobbyMenuUI, window_handle, x, y, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleMouseDown(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
@@ -1516,6 +1537,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             if (currentStage == CLIENT_STAGE_LOBBY) {
+                // Depending on where the mouse is in the lobby,
+                // the lobby preview may consume the mouse move event.
+                if (LobbyPreviewHandleMouseMove(&lobbyPreview, &lobbyMenuUI, x, y, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleMouseMove(&lobbyMenuUI, (float)x, (float)y);
                 return 0;
             }
@@ -1556,6 +1583,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             if (currentStage == CLIENT_STAGE_LOBBY) {
+                // Depending on where the mouse is in the lobby,
+                // the lobby preview may consume the mouse up event.
+                if (LobbyPreviewHandleMouseUp(&lobbyPreview, &lobbyMenuUI, window_handle, x, y, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleMouseUp(&lobbyMenuUI, (float)x, (float)y, openglContext.width, openglContext.height);
                 return 0;
             }
@@ -1656,6 +1689,15 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             }
 
             if (currentStage == CLIENT_STAGE_LOBBY) {
+                // Depending on where the mouse is in the lobby,
+                // the lobby preview may consume the mouse wheel event.
+                POINT cursor = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                ScreenToClient(window_handle, &cursor);
+                if (LobbyPreviewHandleMouseWheel(&lobbyPreview, &lobbyMenuUI, window_handle, wheelDelta,
+                        (int)cursor.x, (int)cursor.y, CAMERA_ZOOM_FACTOR, &openglContext)) {
+                    return 0;
+                }
+
                 LobbyMenuUIHandleScroll(&lobbyMenuUI, openglContext.height, wheelSteps);
                 return 0;
             }
@@ -1831,6 +1873,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     cameraState.minZoom = CAMERA_MIN_ZOOM;
     cameraState.maxZoom = CAMERA_MAX_ZOOM;
 
+    // Initialize the preview context so lobby previews can be generated on demand.
+    LobbyPreviewInitialize(&lobbyPreview, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+
     // Initialize the login menu UI state so the player can enter connection info.
     LoginMenuUIInitialize(&loginMenuUI);
 
@@ -1948,6 +1993,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 if (factionId == assignedFactionId) {
                     SendLobbyColorUpdate(factionId, r, g, b);
                 }
+                // Keep the preview synchronized with newly committed colors.
+                LobbyPreviewMarkDirty(&lobbyPreview);
             }
         }
 
@@ -1974,6 +2021,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             if (levelInitialized && deltaTime > 0.0f) {
                 LevelUpdate(&level, deltaTime);
             }
+        } else if (currentStage == CLIENT_STAGE_LOBBY) {
+            // Parse settings so the preview only regenerates on valid input.
+            LobbyMenuGenerationSettings previewSettings = {0};
+            bool settingsValid = LobbyMenuUIGetSettings(&lobbyMenuUI, &previewSettings);
+
+            // Update preview camera and regenerate preview content when needed.
+            LobbyPreviewUpdate(&lobbyPreview,
+                &lobbyMenuUI,
+                &previewSettings,
+                settingsValid,
+                lobbyMenuUI.slotColors,
+                lobbyMenuUI.slotColorValid,
+                lobbyMenuUI.slotCount,
+                window_handle,
+                deltaTime,
+                CAMERA_EDGE_PAN_MARGIN,
+                CAMERA_EDGE_PAN_SPEED,
+                &openglContext);
         }
 
         // Calculate frames per second (FPS) for display.
@@ -1990,6 +2055,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     PlayerSelectionFree(&selectionState);
     PlayerControlGroupsFree(&controlGroups);
     LevelRelease(&level);
+    LobbyPreviewRelease(&lobbyPreview);
 
     if (clientSocket != INVALID_SOCKET) {
         closesocket(clientSocket);

@@ -32,6 +32,7 @@
 #include "Utilities/MenuUtilities/loginMenuUtilities.h"
 #include "Utilities/MenuUtilities/lobbyMenuUtilities.h"
 #include "Objects/player.h"
+#include "Utilities/MenuUtilities/lobbyPreviewUtilities.h"
 
 // Minimum distance in pixels the mouse must move
 // for a left button drag to be considered a box selection 
