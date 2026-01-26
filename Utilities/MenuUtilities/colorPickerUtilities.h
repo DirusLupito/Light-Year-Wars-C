@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 // Size of the color swatch displayed in slot rows.
-#define COLOR_PICKER_SWATCH_SIZE 18.0f
+#define COLOR_PICKER_SWATCH_SIZE 36.0f
 
 // Padding between the color swatch and the slot area edge.
 #define COLOR_PICKER_SWATCH_PADDING 6.0f
