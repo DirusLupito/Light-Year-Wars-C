@@ -360,6 +360,47 @@ static void ClampWindowDimensions(float *width, float *height) {
 }
 
 /**
+ * Computes the maximum preview panel height based on the level aspect ratio.
+ * This keeps the preview viewport from exceeding the proportions implied by
+ * the maximum preview width so the map is never stretched vertically.
+ * @param state Pointer to the LobbyMenuUIState to read level settings from.
+ * @param fallbackHeight Height to return when no valid aspect ratio is available.
+ * @return The capped preview panel height in pixels.
+ */
+static float LobbyMenuPreviewMaxHeight(const LobbyMenuUIState *state, float fallbackHeight) {
+    // If settings are unavailable, keep the existing height to avoid layout jumps.
+    if (state == NULL) {
+        return fallbackHeight;
+    }
+
+    float levelWidth = state->settings.levelWidth;
+    float levelHeight = state->settings.levelHeight;
+
+    // When dimensions are invalid, we avoid clamping so the UI stays stable.
+    if (levelWidth <= 0.0f || levelHeight <= 0.0f) {
+        return fallbackHeight;
+    }
+
+    // The aspect ratio gives us the tallest viewport allowed at max width.
+    float aspect = levelHeight / levelWidth;
+    if (aspect <= 0.0f) {
+        return fallbackHeight;
+    }
+
+    // We include header and padding so the visible viewport respects the aspect.
+    float maxViewportHeight = LOBBY_MENU_PREVIEW_PANEL_MAX_WIDTH * aspect;
+    float maxPanelHeight = maxViewportHeight + LOBBY_MENU_PREVIEW_PANEL_HEADER_HEIGHT +
+        2.0f * LOBBY_MENU_PREVIEW_PANEL_PADDING;
+
+    // If the derived height is invalid, fall back to the existing panel height.
+    if (maxPanelHeight <= 0.0f) {
+        return fallbackHeight;
+    }
+
+    return fminf(fallbackHeight, maxPanelHeight);
+}
+
+/**
  * Computes layout rectangles for the lobby menu UI components.
  * @param state Pointer to the LobbyMenuUIState for slot count.
  * @param width Current width of the UI area.
@@ -569,6 +610,7 @@ bool LobbyMenuUIGetPanelRect(LobbyMenuUIState *state, int width, int height, Men
 
 /**
  * Retrieves the computed preview panel rectangle aligned to the lobby panel.
+ * The height is capped using the level aspect ratio to preserve the preview scale.
  * @param state Pointer to the LobbyMenuUIState to read.
  * @param width Current width of the UI area.
  * @param height Current height of the UI area.
@@ -614,10 +656,13 @@ bool LobbyMenuUIGetPreviewPanelRect(LobbyMenuUIState *state, int width, int heig
         return false;
     }
 
+    // Cap the preview height based on the level aspect ratio at max width.
+    float previewHeight = LobbyMenuPreviewMaxHeight(state, panel.height);
+
     previewOut->x = panel.x + panel.width + LOBBY_MENU_PREVIEW_PANEL_MARGIN;
     previewOut->y = panel.y;
     previewOut->width = previewWidth;
-    previewOut->height = panel.height;
+    previewOut->height = previewHeight;
     return true;
 }
 

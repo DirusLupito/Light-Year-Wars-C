@@ -238,6 +238,8 @@ bool LobbyMenuUIGetPanelRect(LobbyMenuUIState *state, int width, int height, Men
 
 /**
  * Retrieves the computed preview panel rectangle aligned to the lobby panel.
+ * The preview height is capped using the level aspect ratio and the maximum
+ * preview width so the viewport never stretches the preview beyond its proportions.
  * @param state Pointer to the LobbyMenuUIState to read.
  * @param width Current width of the UI area.
  * @param height Current height of the UI area.
