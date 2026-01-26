@@ -691,14 +691,41 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     boxSelectActive = false;
     boxSelectDragging = false;
 
-    // Reset camera to default position and zoom.
+    // Reset camera to a known baseline so we can compute a deterministic start view.
     cameraState.position = Vec2Zero();
-    CameraSetZoom(&cameraState, 1.0f);
     RefreshCameraBounds();
     RefreshLocalFaction();
 
-    // Update the min zoom based on the new level size.
+    // Update the min zoom based on the new level size so the midpoint zoom uses fresh bounds.
     cameraState.minZoom = CAMERA_MIN_ZOOM / (fmaxf(level.width, level.height) / 2000.0f);
+
+    // Set zoom tobe halfway zoomed out
+    float targetZoom = cameraState.minZoom * 2.0f;
+    CameraSetZoom(&cameraState, targetZoom);
+
+    // Aim the camera at the centroid of the player's owned planets,
+    // falling back to the level center if the faction has no territory yet.
+    Vec2 targetCenter = {level.width * 0.5f, level.height * 0.5f};
+    if (!LevelComputeFactionPlanetCentroid(&level, localFaction, &targetCenter)) {
+        // We keep the fallback deterministic so the game start view is stable.
+        targetCenter.x = level.width * 0.5f;
+        targetCenter.y = level.height * 0.5f;
+    }
+
+    // Convert the desired center into the camera's top-left coordinates,
+    // because the camera stores the world-space origin of the view rectangle.
+    if (cameraState.zoom > 0.0f && openglContext.width > 0 && openglContext.height > 0) {
+        float viewWidth = (float)openglContext.width / cameraState.zoom;
+        float viewHeight = (float)openglContext.height / cameraState.zoom;
+        cameraState.position.x = targetCenter.x - viewWidth * 0.5f;
+        cameraState.position.y = targetCenter.y - viewHeight * 0.5f;
+    } else {
+        // If the viewport size is not ready, we at least anchor the position at the target.
+        cameraState.position = targetCenter;
+    }
+
+    // Clamp after the new zoom/position so we stay within level bounds.
+    ClampCameraToLevel();
 
     // Clear any status messages in the lobby UI
     // and reset the slots to empty.

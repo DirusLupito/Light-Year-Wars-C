@@ -337,6 +337,17 @@ void LevelRemoveStarship(Level *level, size_t index);
 void LevelUpdate(Level *level, float deltaTime);
 
 /**
+ * Computes the centroid of planets owned by the given faction.
+ * This is useful for camera centering and other UI defaults that should
+ * focus on a player's territory instead of arbitrary world coordinates.
+ * @param level A pointer to the Level containing planets to evaluate.
+ * @param faction A pointer to the owning Faction to match against planet owners.
+ * @param outCentroid Output vector for the computed centroid in world coordinates.
+ * @return true if at least one planet matched and the centroid was computed, false otherwise.
+ */
+bool LevelComputeFactionPlanetCentroid(const Level *level, const Faction *faction, Vec2 *outCentroid);
+
+/**
  * Creates a full level packet buffer for network transmission.
  * This function allocates memory for the packet buffer and fills it with
  * the full state of the level, including factions, planets, and starships.

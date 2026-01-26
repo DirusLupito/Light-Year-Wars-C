@@ -483,6 +483,51 @@ void LevelUpdate(Level *level, float deltaTime) {
 }
 
 /**
+ * Computes the centroid of planets owned by the given faction.
+ * This is used for camera defaults so the view starts centered on the player's territory.
+ * @param level A pointer to the Level containing planets to evaluate.
+ * @param faction A pointer to the owning Faction to match against planet owners.
+ * @param outCentroid Output vector for the computed centroid in world coordinates.
+ * @return true if at least one planet matched and the centroid was computed, false otherwise.
+ */
+bool LevelComputeFactionPlanetCentroid(const Level *level, const Faction *faction, Vec2 *outCentroid) {
+    // Basic validation of input pointers so we do not dereference invalid inputs.
+    if (level == NULL || faction == NULL || outCentroid == NULL) {
+        return false;
+    }
+
+    // If the level has no planets, there is nothing to aggregate.
+    if (level->planets == NULL || level->planetCount == 0) {
+        return false;
+    }
+
+    // Accumulate positions for planets owned by the requested faction.
+    Vec2 sum = Vec2Zero();
+    size_t matchCount = 0;
+    for (size_t i = 0; i < level->planetCount; ++i) {
+        // We compare owner pointers because the level owns the faction instances.
+        if (level->planets[i].owner != faction) {
+            continue;
+        }
+
+        sum.x += level->planets[i].position.x;
+        sum.y += level->planets[i].position.y;
+        matchCount += 1;
+    }
+
+    // Avoid a divide-by-zero when the faction owns no planets.
+    if (matchCount == 0) {
+        return false;
+    }
+
+    // Convert accumulated sums into an average position for the centroid.
+    float invCount = 1.0f / (float)matchCount;
+    outCentroid->x = sum.x * invCount;
+    outCentroid->y = sum.y * invCount;
+    return true;
+}
+
+/**
  * Applies a full level packet to the provided Level instance.
  * This populates factions, planets, and starships based on the packet data.
  * Existing data in the level is replaced. The level must have been initialized.
