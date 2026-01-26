@@ -10,6 +10,7 @@
 typedef struct AIPersonality AIPersonality;
 typedef struct PlanetPair PlanetPair;
 struct Level;
+struct Faction;
 
 /**
  * The Idle AI personality instance.
@@ -22,8 +23,9 @@ extern AIPersonality IDLE_AI_PERSONALITY;
  * This function does nothing and always returns NULL and 0.
  * @param level A pointer to the current Level struct.
  * @param outPairCount A pointer to an integer where the number of returned pairs will be stored.
+ * @param faction Pointer to the Faction for whom the AI is making decisions.
  * @return Always returns NULL.
  */
-PlanetPair* idleAIDecideActions(struct AIPersonality *self, struct Level *level, int *outPairCount);
+PlanetPair* idleAIDecideActions(struct AIPersonality *self, struct Level *level, int *outPairCount, struct Faction *faction);
 
 #endif // AI_IDLEAI_H

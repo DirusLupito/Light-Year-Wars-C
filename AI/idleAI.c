@@ -20,15 +20,16 @@ AIPersonality IDLE_AI_PERSONALITY = {
 /**
  * The action function for the Idle AI personality.
  * This function does nothing and always returns NULL and 0.
- * @param self A pointer to the AI personality struct (not used).
- * @param level A pointer to the current Level struct (not used).
+ * @param level A pointer to the current Level struct.
  * @param outPairCount A pointer to an integer where the number of returned pairs will be stored.
+ * @param faction Pointer to the Faction for whom the AI is making decisions.
  * @return Always returns NULL.
  */
-PlanetPair* idleAIDecideActions(struct AIPersonality *self, struct Level *level, int *outPairCount) {
+PlanetPair* idleAIDecideActions(struct AIPersonality *self, struct Level *level, int *outPairCount, struct Faction *faction) {
     // Idle AI ignores its inputs by design to avoid influencing the simulation.
     (void)self;
     (void)level;
+    (void)faction;
 
     // Idle AI does nothing, so we set the output count to 0 and return NULL.
     if (outPairCount) {

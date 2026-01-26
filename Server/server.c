@@ -553,7 +553,7 @@ static void RunAIActions(void) {
         }
 
         int pairCount = 0;
-        PlanetPair *pairs = ai->decideActions(ai, &level, &pairCount);
+        PlanetPair *pairs = ai->decideActions(ai, &level, &pairCount, faction);
         if (pairs == NULL || pairCount <= 0) {
             continue;
         }

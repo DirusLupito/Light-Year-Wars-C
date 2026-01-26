@@ -2,7 +2,7 @@
  * Represents an abstract AI personality.
  * 
  * All AI personalities must implement a function which
- * takes in a pointer to a Level struct and returns a list
+ * takes in a pointer to a Level struct and a faction to play for and returns a list
  * of pairs, or tuples, of planets. The first planet in each pair
  * is the source planet, and the second planet is the target planet.
  * Each source planet will launch a fleet to the corresponding target planet.
@@ -14,6 +14,7 @@
  * 2. The new AI personality must be registered in here under the
  *   AI_PERSONALITY_COUNT and AI_PERSONALITIES definitions.
  * 3. The new AI personality's header file must be included here.
+ * 4. The makefile must be updated to compile the new AI personality source file.
  * 
  * After these steps, the new AI personality will be available for use.
  * 
@@ -27,21 +28,24 @@
 
 #include "Objects/planet.h"
 #include "AI/idleAI.h"
+#include "AI/basicAI.h"
 
 // Forward declaration keeps the header lightweight since only pointers are used here.
 struct Level;
+struct Faction;
 
 // Defines the frequency, in hertz, at which the AI's action function should be called.
 #define AI_ACTION_RATE 2 
 
 // Defines the number of different AI personalities currently implemented.
 // Update this when registering a new AI personality.
-#define AI_PERSONALITY_COUNT 1
+#define AI_PERSONALITY_COUNT 2
 
 // Defines all currently implemented AI personalities.
 // New AI personalities must be registered here.
 #define AI_PERSONALITIES \
-    &IDLE_AI_PERSONALITY
+    &IDLE_AI_PERSONALITY, \
+    &BASIC_AI_PERSONALITY
 
 
 /**
@@ -59,7 +63,7 @@ typedef struct PlanetPair {
  * All AI personalities have a name.
  * 
  * All AI personalities must implement a function which
- * takes in a pointer to a Level struct and returns a list
+ * takes in a pointer to a Level struct and a faction to play for and returns a list
  * of pairs, or tuples, of planets. The first planet in each pair
  * is the source planet, and the second planet is the target planet.
  * Each source planet will launch a fleet to the corresponding target planet.
@@ -79,10 +83,11 @@ typedef struct AIPersonality {
      * @param level Pointer to the Level struct representing the current game state.
      * @param outPairCount Pointer to an integer where the function will store
      *                     the number of PlanetPair structs returned.
+     * @param faction Pointer to the Faction for whom the AI is making decisions.
      * @return A dynamically allocated array of PlanetPair structs representing
      *         the actions to take. The caller is responsible for freeing this array.
      */
-    PlanetPair* (*decideActions)(struct AIPersonality *self, struct Level *level, int *outPairCount);
+    PlanetPair* (*decideActions)(struct AIPersonality *self, struct Level *level, int *outPairCount, struct Faction *faction);
 } AIPersonality;
 
 /**
