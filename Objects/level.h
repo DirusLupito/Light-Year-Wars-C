@@ -167,9 +167,10 @@ typedef struct LevelJoinRequestPacket {
 } LevelJoinRequestPacket;
 
 // A LevelLobbySlotInfo communicates who occupies a given faction slot in the lobby.
-// occupied is 1 when filled by a player, otherwise 0. playerName mirrors the client's chosen name.
+// occupied is 1 when filled by a player or AI, otherwise 0. playerName mirrors the client's chosen name.
 typedef struct LevelLobbySlotInfo {
     int32_t factionId;
+    int32_t aiIndex;
     uint8_t occupied;
     uint8_t reserved[3];
     float color[4];

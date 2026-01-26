@@ -26,6 +26,12 @@ static size_t playerCount = 0;
 // Accumulator for snapshot timing.
 // Used to track time elapsed since last snapshot broadcast.
 static float planetStateAccumulator = 0.0f;
+
+// Accumulator for AI action timing.
+// Used to run AI turns at a fixed rate regardless of frame rate.
+static float aiActionAccumulator = 0.0f;
+
+// UDP socket used for communication with clients.
 static SOCKET server_socket = INVALID_SOCKET;
 
 // Camera state used for navigating the server's spectator view.
@@ -85,8 +91,13 @@ static void BroadcastLobbyStateToAll(void);
 static void SendLobbyStateToPlayerInstance(Player *player);
 static void ProcessLobbyUI();
 static bool AttemptStartGame(void);
-static int HighestAssignedFactionId(void);
+static int HighestOccupiedFactionId(void);
 static void ApplyFactionColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b);
+static int FindAIPersonalityIndex(const AIPersonality *personality);
+static AIPersonality *ResolveAIPersonalityByIndex(int index);
+static size_t CountAIFactions(void);
+static bool SlotHasHumanPlayer(size_t factionIndex);
+static void RunAIActions(void);
 
 /**
  * Converts screen coordinates to world coordinates using the current camera state.
@@ -300,6 +311,13 @@ static bool ConfigureLobbyFactions(size_t factionCount) {
 
         // Then we assign colors cycling through red, green, and blue components.
         level.factions[i] = CreateFaction((int)i, shade, 0.4f + 0.2f * (float)(i % 2), 0.6f + 0.25f * (float)((i + 1) % 2));
+
+        // Reapply any AI selections stored in the lobby UI so the level stays in sync.
+        int aiIndex = -1;
+        if (i < lobbyMenuUI.slotCount) {
+            aiIndex = lobbyMenuUI.slotAiIndex[i];
+        }
+        FactionSetAIPersonality(&level.factions[i], ResolveAIPersonalityByIndex(aiIndex));
     }
 
     // Set the level dimensions based on the current lobby settings.
@@ -360,8 +378,28 @@ static void RefreshLobbySlots(void) {
                 break;
             }
         }
+
+        // Or any AI personality assigned to that faction.
+        int aiIndex = -1;
+        if (level.factions != NULL && i < level.factionCount) {
+            aiIndex = FindAIPersonalityIndex(level.factions[i].aiPersonality);
+        }
+
+        // Human-occupied slots must remain AI-free to avoid conflicting control.
+        if (occupied && level.factions != NULL && i < level.factionCount) {
+            FactionSetAIPersonality(&level.factions[i], NULL);
+            aiIndex = -1;
+        }
+
+        bool aiOccupied = aiIndex >= 0;
+        if (!occupied && aiOccupied) {
+            occupied = true;
+            occupantName = "AI";
+        }
+
         // Update the slot info in the lobby UI.
         LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, (int)i, occupied, occupantName);
+        LobbyMenuUISetSlotAI(&lobbyMenuUI, i, aiIndex);
 
         // Also set the slot color based on the faction color.
         if (level.factions != NULL && i < level.factionCount) {
@@ -377,11 +415,11 @@ static void RefreshLobbySlots(void) {
 }
 
 /**
- * Determines the highest assigned faction ID among all connected players.
- * Used to ensure lobby settings are valid before starting the game.
- * @return The highest faction ID assigned to any player, or -1 if no players are connected.
+ * Determines the highest occupied faction ID among all humans and AI.
+ * Used to ensure lobby settings remain compatible with occupied slots.
+ * @return The highest occupied faction ID, or -1 if no slots are occupied.
  */
-static int HighestAssignedFactionId(void) {
+static int HighestOccupiedFactionId(void) {
     int maxId = -1;
 
     // Iterate through all players to find the maximum faction ID.
@@ -390,6 +428,16 @@ static int HighestAssignedFactionId(void) {
             maxId = players[i].factionId;
         }
     }
+
+    // Also check AI-controlled factions so they count as occupied slots.
+    if (level.factions != NULL) {
+        for (size_t i = 0; i < level.factionCount; ++i) {
+            if (level.factions[i].aiPersonality != NULL && (int)i > maxId) {
+                maxId = (int)i;
+            }
+        }
+    }
+
     return maxId;
 }
 
@@ -420,6 +468,116 @@ static void ApplyFactionColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t
 }
 
 /**
+ * Finds the index of an AI personality pointer in the registry.
+ * @param personality Pointer to the AI personality, or NULL.
+ * @return The index in g_aiPersonalities, or -1 if not found.
+ */
+static int FindAIPersonalityIndex(const AIPersonality *personality) {
+    if (personality == NULL) {
+        return -1;
+    }
+
+    for (int i = 0; i < AI_PERSONALITY_COUNT; ++i) {
+        if (g_aiPersonalities[i] == personality) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+/**
+ * Resolves a registry index into an AI personality pointer.
+ * @param index The AI personality index.
+ * @return The AI personality pointer, or NULL if the index is invalid.
+ */
+static AIPersonality *ResolveAIPersonalityByIndex(int index) {
+    if (index < 0 || index >= AI_PERSONALITY_COUNT) {
+        return NULL;
+    }
+
+    return g_aiPersonalities[index];
+}
+
+/**
+ * Counts the number of factions currently controlled by AI.
+ * @return The count of AI-controlled factions.
+ */
+static size_t CountAIFactions(void) {
+    if (level.factions == NULL) {
+        return 0;
+    }
+
+    size_t count = 0;
+    for (size_t i = 0; i < level.factionCount; ++i) {
+        // We consider a faction AI-controlled if it has a non-NULL personality assigned.
+        // That means even the idle AI counts as AI-controlled despite being
+        // effectively the same as no AI at all.
+        if (level.factions[i].aiPersonality != NULL) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+/**
+ * Checks whether a faction slot is occupied by a human player.
+ * @param factionIndex Faction slot index to test.
+ * @return True if a human player occupies the slot, false otherwise.
+ */
+static bool SlotHasHumanPlayer(size_t factionIndex) {
+    for (size_t i = 0; i < playerCount; ++i) {
+        // We consider a slot occupied by a human if any player has that faction ID assigned.
+        if (players[i].factionId == (int)factionIndex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Executes AI decisions for all AI-controlled factions and launches fleets.
+ * This is invoked at a fixed rate, specified by AI_ACTION_RATE in aiPersonality.h.
+ */
+static void RunAIActions(void) {
+    if (level.factions == NULL || level.factionCount == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < level.factionCount; ++i) {
+        Faction *faction = &level.factions[i];
+        AIPersonality *ai = faction->aiPersonality;
+        if (ai == NULL || ai->decideActions == NULL) {
+            continue;
+        }
+
+        int pairCount = 0;
+        PlanetPair *pairs = ai->decideActions(ai, &level, &pairCount);
+        if (pairs == NULL || pairCount <= 0) {
+            continue;
+        }
+
+        for (int p = 0; p < pairCount; ++p) {
+            Planet *origin = pairs[p].origin;
+            Planet *destination = pairs[p].destination;
+
+            // Only allow the AI to launch fleets from its own planets.
+            if (origin->owner != faction) {
+                continue;
+            }
+
+            // More validation is done inside LaunchFleetAndBroadcast.
+            LaunchFleetAndBroadcast(origin, destination);
+        }
+
+        // The AI function specifies that we own the returned array
+        // and are therefore responsible for freeing it.
+        free(pairs);
+    }
+}
+
+/**
  * Builds the lobby state packet and slot info array based on current settings and player assignments
  * to be sent to players to inform them of the current lobby state.
  * @param packet Pointer to the LevelLobbyStatePacket to populate.
@@ -441,7 +599,7 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
     packet->levelWidth = lobbySettings.levelWidth;
     packet->levelHeight = lobbySettings.levelHeight;
     packet->randomSeed = lobbySettings.randomSeed;
-    packet->occupiedCount = (uint32_t)playerCount;
+    packet->occupiedCount = (uint32_t)(playerCount + CountAIFactions());
 
     // Determine the total number of slots to populate.
     // Will either be the faction count or the max slots allowed.
@@ -454,11 +612,15 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
     for (size_t i = 0; i < slotCount; ++i) {
         memset(&slots[i], 0, sizeof(LevelLobbySlotInfo));
         slots[i].factionId = (int32_t)i;
+        slots[i].aiIndex = -1;
         slots[i].occupied = 0u;
 
         if (i < level.factionCount && level.factions != NULL) {
             memcpy(slots[i].color, level.factions[i].color, sizeof(slots[i].color));
+            slots[i].aiIndex = FindAIPersonalityIndex(level.factions[i].aiPersonality);
         }
+
+        // Mark slots occupied by humans first so AI cannot override their status.
         for (size_t j = 0; j < playerCount; ++j) {
             if (players[j].factionId == (int)i) {
                 slots[i].occupied = 1u;
@@ -466,6 +628,13 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
                 slots[i].playerName[PLAYER_NAME_MAX_LENGTH] = '\0';
                 break;
             }
+        }
+
+        // If no human is occupying the slot, AI still counts as occupied.
+        if (slots[i].occupied == 0u && slots[i].aiIndex >= 0) {
+            slots[i].occupied = 1u;
+            strncpy(slots[i].playerName, "AI", PLAYER_NAME_MAX_LENGTH);
+            slots[i].playerName[PLAYER_NAME_MAX_LENGTH] = '\0';
         }
     }
 }
@@ -530,8 +699,8 @@ static void ProcessLobbyUI(void) {
 
             // We need to ensure the faction count is sufficient for the connected players.
             // We determine the highest assigned faction ID and ensure the count is at least that + 1.
-            int highestAssigned = HighestAssignedFactionId();
-            int minNeeded = (int)playerCount;
+            int highestAssigned = HighestOccupiedFactionId();
+            int minNeeded = (int)(playerCount + CountAIFactions());
             if (highestAssigned >= 0 && highestAssigned + 1 > minNeeded) {
                 minNeeded = highestAssigned + 1;
             }
@@ -569,6 +738,24 @@ static void ProcessLobbyUI(void) {
     if (LobbyMenuUIConsumeColorCommit(&lobbyMenuUI, &factionId, &r, &g, &b)) {
         ApplyFactionColorUpdate(factionId, r, g, b);
     }
+
+    // Apply any committed AI personality choices from the server lobby UI.
+    size_t aiSlotIndex = 0;
+    int aiIndex = -1;
+    if (LobbyMenuUIConsumeAISelection(&lobbyMenuUI, &aiSlotIndex, &aiIndex)) {
+        if (level.factions != NULL && aiSlotIndex < level.factionCount) {
+            // Human slots must remain AI-free, so ignore selections on those slots.
+            if (!SlotHasHumanPlayer(aiSlotIndex)) {
+                FactionSetAIPersonality(&level.factions[aiSlotIndex], ResolveAIPersonalityByIndex(aiIndex));
+            } else {
+                FactionSetAIPersonality(&level.factions[aiSlotIndex], NULL);
+                LobbyMenuUISetSlotAI(&lobbyMenuUI, aiSlotIndex, -1);
+            }
+
+            RefreshLobbySlots();
+            lobbyStateDirty = true;
+        }
+    }
 }
 
 /**
@@ -586,8 +773,8 @@ static bool AttemptStartGame(void) {
     }
 
     // Ensure the faction count is sufficient for the connected players.
-    int highestAssigned = HighestAssignedFactionId();
-    int minNeeded = (int)playerCount;
+    int highestAssigned = HighestOccupiedFactionId();
+    int minNeeded = (int)(playerCount + CountAIFactions());
     if (highestAssigned >= 0 && highestAssigned + 1 > minNeeded) {
         minNeeded = highestAssigned + 1;
     }
@@ -612,6 +799,7 @@ static bool AttemptStartGame(void) {
                 existingFactions[i].id = level.factions[i].id;
                 size_t colorSize = sizeof(level.factions[i].color);
                 memcpy(existingFactions[i].color, level.factions[i].color, colorSize);
+                existingFactions[i].aiPersonality = level.factions[i].aiPersonality;
             }
         }
     }
@@ -653,6 +841,9 @@ static bool AttemptStartGame(void) {
             // Copy color.
             size_t colorSize = sizeof(existing->color);
             memcpy(newFaction->color, existing->color, colorSize);
+
+            // Preserve AI assignments so AI slots remain consistent during game start.
+            newFaction->aiPersonality = existing->aiPersonality;
         }
 
         // We can now free the temporary storage.
@@ -1101,6 +1292,11 @@ static const Faction *FindAvailableFaction(void) {
                 inUse = true;
                 break;
             }
+        }
+
+        // AI-controlled slots are also considered occupied and not assignable to humans.
+        if (!inUse && candidate->aiPersonality != NULL) {
+            inUse = true;
         }
         if (!inUse) {
             return candidate;
@@ -1742,6 +1938,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
             // Update the level state
             LevelUpdate(&level, delta_time);
+
+            // We run AI actions at a fixed rate (default 2Hz) since there isn't much need
+            // to process them every frame. The game isn't that fast-paced (yet).
+            if (AI_ACTION_RATE > 0) {
+                float interval = 1.0f / (float)AI_ACTION_RATE;
+                aiActionAccumulator += delta_time;
+                while (aiActionAccumulator >= interval) {
+                    RunAIActions();
+                    aiActionAccumulator -= interval;
+                }
+            }
         } else {
             ProcessLobbyUI();
             LobbyPreviewUpdate(&lobbyPreview,

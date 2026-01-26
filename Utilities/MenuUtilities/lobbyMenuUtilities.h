@@ -24,9 +24,10 @@
 #include "Utilities/MenuUtilities/commonMenuUtilities.h"
 #include "Utilities/MenuUtilities/menuComponentUtilities.h"
 #include "Utilities/MenuUtilities/colorPickerUtilities.h"
+#include "AI/aiPersonality.h"
 
 // Maximum number of player slots in the lobby.
-#define LOBBY_MENU_MAX_SLOTS 16
+#define LOBBY_MENU_MAX_SLOTS 64
 
 // Maximum length of the status message string.
 #define LOBBY_MENU_STATUS_MAX_LENGTH 127
@@ -77,10 +78,20 @@
 #define LOBBY_MENU_SECTION_SPACING 30.0f
 
 // Height of each slot row in the lobby menu.
-#define LOBBY_MENU_SLOT_ROW_HEIGHT 26.0f
+// We reserve extra vertical space so slot details can include AI text.
+#define LOBBY_MENU_SLOT_ROW_HEIGHT 44.0f
 
 // Spacing between slot rows in the lobby menu.
 #define LOBBY_MENU_SLOT_ROW_SPACING 6.0f
+
+// Height of each row inside the AI dropdown list.
+#define LOBBY_MENU_AI_ROW_HEIGHT 22.0f
+
+// Padding inside the AI dropdown panel.
+#define LOBBY_MENU_AI_DROPDOWN_PADDING 8.0f
+
+// Vertical spacing between the slot text and the AI line.
+#define LOBBY_MENU_AI_TEXT_SPACING 6.0f
 
 // Horizontal spacing between the lobby panel and preview panel.
 #define LOBBY_MENU_PREVIEW_PANEL_MARGIN 24.0f
@@ -162,11 +173,17 @@ typedef struct LobbyMenuUIState {
     int slotFactionIds[LOBBY_MENU_MAX_SLOTS];
     bool slotOccupied[LOBBY_MENU_MAX_SLOTS];
     char slotNames[LOBBY_MENU_MAX_SLOTS][PLAYER_NAME_MAX_LENGTH + 1];
+    int slotAiIndex[LOBBY_MENU_MAX_SLOTS];
     int highlightedFactionId; /* Slot to highlight (e.g. local faction). */
 
     /* Slot colors (RGBA 0-1) for display and editing. */
     float slotColors[LOBBY_MENU_MAX_SLOTS][4];
     bool slotColorValid[LOBBY_MENU_MAX_SLOTS];
+    bool aiDropdownOpen; /* True when the AI selection dropdown is open. */
+    int aiDropdownSlotIndex; /* Slot index currently showing the AI dropdown. */
+    bool aiSelectionPending; /* True when a new AI selection is waiting to be consumed. */
+    size_t aiSelectionSlotIndex; /* Slot index associated with the pending AI selection. */
+    int aiSelectionIndex; /* AI index selected from the dropdown, or -1 for none. */
 
     /* Color picker state for RGB selection. */
     ColorPickerUIState colorPicker;
@@ -263,6 +280,14 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount);
  * @param playerName Null-terminated player name occupying the slot (ignored when not occupied).
  */
 void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId, bool occupied, const char *playerName);
+
+/**
+ * Sets the AI personality index for a specific lobby slot.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param aiIndex Index of the AI personality, or -1 for none.
+ */
+void LobbyMenuUISetSlotAI(LobbyMenuUIState *state, size_t index, int aiIndex);
 
 /**
  * Sets the display color for a specific lobby slot.
@@ -367,6 +392,15 @@ bool LobbyMenuUIConsumeStartRequest(LobbyMenuUIState *state);
  * @return True if a color change was pending, false otherwise.
  */
 bool LobbyMenuUIConsumeColorCommit(LobbyMenuUIState *state, int *outFactionId, uint8_t *outR, uint8_t *outG, uint8_t *outB);
+
+/**
+ * Consumes a pending AI selection from the lobby UI, if one exists.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outSlotIndex Output slot index whose AI selection changed.
+ * @param outAiIndex Output AI index selected, or -1 for none.
+ * @return True if a selection was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeAISelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outAiIndex);
 
 /**
  * Renders the lobby menu UI using OpenGL.

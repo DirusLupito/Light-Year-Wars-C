@@ -548,6 +548,9 @@ bool LevelApplyFullPacket(Level *level, const void *data, size_t size) {
         for (size_t c = 0; c < 4; ++c) {
             level->factions[i].color[c] = factionInfo[i].color[c];
         }
+
+        // Network packets do not carry AI assignments, so we clear them here.
+        level->factions[i].aiPersonality = NULL;
     }
 
     // Move the cursor past the faction data, to what better be planet data.

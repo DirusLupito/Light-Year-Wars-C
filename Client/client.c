@@ -152,6 +152,7 @@ static void ApplyCameraTransform(void);
 static Vec2 ScreenToWorld(Vec2 screen);
 static Vec2 WorldToScreen(Vec2 world);
 static void RefreshCameraBounds(void);
+static bool IsServerFullMessage(const uint8_t *data, size_t length);
 
 /**
  * Helper function to draw selection highlights
@@ -449,6 +450,28 @@ static void RefreshCameraBounds(void) {
 
     // Clamp the camera position to ensure it is within the new bounds.
     ClampCameraToLevel();
+}
+
+/**
+ * Checks if a received payload matches the server's full-lobby message.
+ * We use a raw string check here because the server sends a plain text token.
+ * @param data Pointer to the received data.
+ * @param length Length of the received data.
+ * @return True if the message is a full-lobby token, false otherwise.
+ */
+static bool IsServerFullMessage(const uint8_t *data, size_t length) {
+    if (data == NULL) {
+        return false;
+    }
+
+    const char *fullMessage = "SERVER_FULL";
+    size_t fullLength = strlen(fullMessage);
+    if (length != fullLength) {
+        return false;
+    }
+
+    // We compare raw bytes to avoid relying on null termination.
+    return memcmp(data, fullMessage, fullLength) == 0;
 }
 
 /**
@@ -929,6 +952,7 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
         bool occupied = slots[i].occupied != 0u;
         const char *slotName = occupied ? slots[i].playerName : "";
         LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, slots[i].factionId, occupied, slotName);
+        LobbyMenuUISetSlotAI(&lobbyMenuUI, i, slots[i].aiIndex);
         LobbyMenuUISetSlotColor(&lobbyMenuUI, i, slots[i].color);
     }
 
@@ -1081,7 +1105,12 @@ static void ProcessNetworkMessages(void) {
             HandleServerDisconnectPacketMessage(payload, payloadSize);
             break;
         } else {
-            printf("Unknown packet type %u (%d bytes).\n", packetType, received);
+            if (IsServerFullMessage(payload, payloadSize)) {
+                // We print a full lobby message in the login UI so the user understands why join failed.
+                LoginMenuUISetStatusMessage(&loginMenuUI, "Lobby is full. Please try again later.");
+            } else {
+                printf("Unknown packet type %u (%d bytes).\n", packetType, received);
+            }
         }
     }
 }

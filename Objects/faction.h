@@ -9,11 +9,16 @@
 
 #include <stddef.h>
 
+// Forward declaration since we can't include AI/aiPersonality.h here without 
+// causing circular dependencies.
+typedef struct AIPersonality AIPersonality;
+
 // A faction has an ID and a color.
 // It represents a group of planets and starships controlled by a player or AI.
 typedef struct Faction {
     int id;
     float color[4];
+    AIPersonality *aiPersonality;
 } Faction;
 
 /**
@@ -34,5 +39,12 @@ Faction CreateFaction(int id, float r, float g, float b);
  * @param b The blue component of the faction's color (0.0 to 1.0).
  */
 void FactionSetColor(Faction *faction, float r, float g, float b);
+
+/**
+ * Assigns an AI personality to the faction or clears it for human control.
+ * @param faction A pointer to the Faction object to modify.
+ * @param personality Pointer to the AI personality to assign, or NULL for none.
+ */
+void FactionSetAIPersonality(Faction *faction, AIPersonality *personality);
 
 #endif // _FACTION_H_

@@ -22,6 +22,54 @@ static const char *kPreviewButtonLabelOpen = "Preview Level";
 static const char *kPreviewButtonLabelClose = "Close Preview";
 
 /**
+ * Computes the height of the AI dropdown list based on registered personalities.
+ * @return The total dropdown height in pixels.
+ */
+static float LobbyMenuAIDropdownHeight(void) {
+    // We include a "None" option plus each registered personality.
+    float entryCount = (float)(AI_PERSONALITY_COUNT + 1);
+    return LOBBY_MENU_AI_DROPDOWN_PADDING * 2.0f + entryCount * LOBBY_MENU_AI_ROW_HEIGHT;
+}
+
+/**
+ * Resolves the display name for a given AI index.
+ * @param aiIndex The AI index, or -1 for none.
+ * @return A human readable name for display.
+ */
+static const char *LobbyMenuAINameFromIndex(int aiIndex) {
+    // Negative indices are treated as no AI selection.
+    if (aiIndex < 0) {
+        return "None";
+    }
+
+    // Guard against out-of-range indices so UI never crashes.
+    if (aiIndex >= AI_PERSONALITY_COUNT) {
+        return "Unknown";
+    }
+
+    return g_aiPersonalities[aiIndex] != NULL ? g_aiPersonalities[aiIndex]->name : "Unknown";
+}
+
+/**
+ * Computes the rectangle used for the AI type display and click target.
+ * @param slotArea Pointer to the slot area rectangle.
+ * @param rowY The Y position of the current slot row.
+ * @return The rectangle covering the AI text row.
+ */
+static MenuUIRect LobbyMenuComputeAIRect(const MenuUIRect *slotArea, float rowY) {
+    // We ensure the AI rect avoids the color swatch so clicks are unambiguous.
+    float swatchX = slotArea->x + slotArea->width - COLOR_PICKER_SWATCH_PADDING - COLOR_PICKER_SWATCH_SIZE;
+    float width = swatchX - slotArea->x - 6.0f;
+    if (width < 1.0f) {
+        width = slotArea->width;
+    }
+
+    float aiLineY = rowY + MENU_GENERIC_TEXT_HEIGHT + MENU_GENERIC_TEXT_HEIGHT + LOBBY_MENU_AI_TEXT_SPACING;
+    float height = MENU_GENERIC_TEXT_HEIGHT + 6.0f;
+    return MenuUIRectMake(slotArea->x, aiLineY - MENU_GENERIC_TEXT_HEIGHT, width, height);
+}
+
+/**
  * Computes the total vertical height occupied by the stacked input fields.
  * @return Accumulated height including per-field spacing.
  */
@@ -34,6 +82,37 @@ static float LobbyMenuFieldsHeight(void) {
         }
     }
     return height;
+}
+
+/**
+ * Computes the total vertical height occupied by the lobby slot list.
+ * Includes per-slot spacing along with any active dropdown expansions.
+ * @param state Pointer to the LobbyMenuUIState to evaluate.
+ * @return The computed slot list height in pixels.
+ */
+static float LobbyMenuComputeSlotsHeight(const LobbyMenuUIState *state) {
+    // Without state, we cannot infer slot count or dropdown state.
+    if (state == NULL) {
+        return 0.0f;
+    }
+
+    // Base height is derived from the number of visible slot rows.
+    float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
+    if (state->slotCount > 1) {
+        slotsHeight += (float)(state->slotCount - 1) * LOBBY_MENU_SLOT_ROW_SPACING;
+    }
+
+    // Account for the color picker dropdown so the slot stack does not overlap it.
+    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+        slotsHeight += ColorPickerUIHeight();
+    }
+
+    // Account for the AI dropdown so the panel height matches the expanded list.
+    if (state->aiDropdownOpen && state->aiDropdownSlotIndex >= 0 && state->aiDropdownSlotIndex < (int)state->slotCount) {
+        slotsHeight += LobbyMenuAIDropdownHeight();
+    }
+
+    return slotsHeight;
 }
 
 /**
@@ -51,16 +130,8 @@ static float LobbyMenuComputePanelHeight(const LobbyMenuUIState *state) {
     // Field height is driven by the spec table so any new field inherits sizing automatically.
     float fieldsHeight = LobbyMenuFieldsHeight();
 
-    // Likewise, slot height is number of slots times row height plus spacing.
-    float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
-    if (state->slotCount > 1) {
-        slotsHeight += (float)(state->slotCount - 1) * LOBBY_MENU_SLOT_ROW_SPACING;
-    }
-
-    // Add extra space if a color picker dropdown is open.
-    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
-        slotsHeight += ColorPickerUIHeight();
-    }
+    // Slot height includes dropdown expansions so the panel always encloses visible UI.
+    float slotsHeight = LobbyMenuComputeSlotsHeight(state);
 
     float buttonHeight = LOBBY_MENU_BUTTON_HEIGHT;
     if (state != NULL && state->startButton.height > 0.0f) {
@@ -324,30 +395,13 @@ static void ComputeLayout(LobbyMenuUIState *state,
         panelWidth = w;
     }
 
-    // Now that we have panel width, calculate heights.
+    // Now that we have panel width, calculate heights using shared helpers.
 
-    float fieldsHeight = LobbyMenuFieldsHeight();
+    float slotsHeight = LobbyMenuComputeSlotsHeight(state);
 
-    float slotsHeight = (float)state->slotCount * LOBBY_MENU_SLOT_ROW_HEIGHT;
-    if (state->slotCount > 1) {
-        slotsHeight += (float)(state->slotCount - 1) * LOBBY_MENU_SLOT_ROW_SPACING;
-    }
-
-    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
-        slotsHeight += ColorPickerUIHeight();
-    }
-
-    float panelHeight = LOBBY_MENU_TOP_PADDING + fieldsHeight + LOBBY_MENU_BUTTON_SECTION_SPACING +
-        state->startButton.height + LOBBY_MENU_PREVIEW_BUTTON_SPACING + state->previewButton.height +
-        LOBBY_MENU_SECTION_SPACING + slotsHeight + LOBBY_MENU_BOTTOM_PADDING;
-
-
-    // Compute content height for centering calculations.
-    float contentHeight = panelHeight;
-    if (state->statusMessage[0] != '\0') {
-        contentHeight += MENU_GENERIC_TEXT_HEIGHT;
-    }
-    contentHeight += MENU_GENERIC_TEXT_HEIGHT;
+    // The panel height and overall content height are shared with scrolling logic.
+    float panelHeight = LobbyMenuComputePanelHeight(state);
+    float contentHeight = LobbyMenuComputeContentHeight(state);
 
     // Compute panel position to center it horizontally
     // and position it vertically based on scroll offset.
@@ -420,6 +474,11 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
     state->highlightedFactionId = -1;
     state->previewOpen = false;
     state->previewButtonPressed = false;
+    state->aiDropdownOpen = false;
+    state->aiDropdownSlotIndex = -1;
+    state->aiSelectionPending = false;
+    state->aiSelectionSlotIndex = 0;
+    state->aiSelectionIndex = -1;
     LobbyMenuUpdatePreviewButtonLabel(state);
 
     // Reset picker state so there is no stale interaction or pending commits.
@@ -431,6 +490,7 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
         state->slotColors[i][2] = 1.0f;
         state->slotColors[i][3] = 1.0f;
         state->slotColorValid[i] = false;
+        state->slotAiIndex[i] = -1;
     }
 }
 
@@ -710,10 +770,17 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount) {
         state->slotOccupied[i] = false;
         state->slotColorValid[i] = false;
         state->slotNames[i][0] = '\0';
+        state->slotAiIndex[i] = -1;
     }
 
     // Update the slot count.
     state->slotCount = slotCount;
+
+    // Close the AI dropdown if its slot is no longer valid.
+    if (state->aiDropdownOpen && (state->aiDropdownSlotIndex < 0 || state->aiDropdownSlotIndex >= (int)slotCount)) {
+        state->aiDropdownOpen = false;
+        state->aiDropdownSlotIndex = -1;
+    }
 }
 
 /**
@@ -746,6 +813,33 @@ void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId
         state->slotNames[index][PLAYER_NAME_MAX_LENGTH] = '\0';
     } else {
         state->slotNames[index][0] = '\0';
+    }
+}
+
+/**
+ * Sets the AI personality index for a specific lobby slot.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param aiIndex Index of the AI personality, or -1 for none.
+ */
+void LobbyMenuUISetSlotAI(LobbyMenuUIState *state, size_t index, int aiIndex) {
+    if (state == NULL || index >= LOBBY_MENU_MAX_SLOTS) {
+        return;
+    }
+
+    // Clamp to valid range so callers can safely pass raw data.
+    if (aiIndex < -1) {
+        aiIndex = -1;
+    } else if (aiIndex >= AI_PERSONALITY_COUNT) {
+        aiIndex = -1;
+    }
+
+    state->slotAiIndex[index] = aiIndex;
+
+    // Close the dropdown if it targets the slot being updated to avoid stale selections.
+    if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)index) {
+        state->aiDropdownOpen = false;
+        state->aiDropdownSlotIndex = -1;
     }
 }
 
@@ -815,7 +909,13 @@ void LobbyMenuUIClearSlots(LobbyMenuUIState *state) {
         state->slotOccupied[i] = false;
         state->slotColorValid[i] = false;
         state->slotNames[i][0] = '\0';
+        state->slotAiIndex[i] = -1;
     }
+
+    // Close any open AI dropdown to avoid stale interactions.
+    state->aiDropdownOpen = false;
+    state->aiDropdownSlotIndex = -1;
+    state->aiSelectionPending = false;
 }
 
 /**
@@ -899,6 +999,97 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     // Figure out where everything is laid out.
     ComputeLayout(state, width, height, scrollOffset, &panel, &slotArea);
 
+    // Handle AI dropdown interactions before color picker logic so clicks are not misrouted.
+    bool clickedAIUI = false;
+    bool aiActionHandled = false;
+
+    if (state->slotCount > 0) {
+        float rowY = slotArea.y;
+
+        for (size_t i = 0; i < state->slotCount; ++i) {
+            // We only allow AI edits on the host and when the slot is not occupied by a human.
+            bool humanOccupied = state->slotOccupied[i] && state->slotAiIndex[i] < 0;
+            bool canEditAI = state->editable && !humanOccupied;
+
+            // Compute the AI label rectangle for this slot.
+            MenuUIRect aiRect = LobbyMenuComputeAIRect(&slotArea, rowY);
+
+            // If the AI label was clicked, toggle the dropdown on the server.
+            if (MenuUIRectContains(&aiRect, x, y)) {
+                clickedAIUI = true;
+                if (canEditAI) {
+                    // Close any open color picker so the layout stays deterministic.
+                    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+                        int openFactionId = state->slotFactionIds[state->colorPicker.slotIndex];
+                        ColorPickerUIClose(&state->colorPicker, true, state->slotColors[state->colorPicker.slotIndex], openFactionId);
+                    }
+
+                    if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)i) {
+                        state->aiDropdownOpen = false;
+                        state->aiDropdownSlotIndex = -1;
+                    } else {
+                        state->aiDropdownOpen = true;
+                        state->aiDropdownSlotIndex = (int)i;
+                    }
+                    aiActionHandled = true;
+                }
+                break;
+            }
+
+            // If the AI dropdown is open for this slot, handle selection clicks.
+            if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)i) {
+                float dropdownY = rowY + LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+                // The dropdown should align to the AI box so the click target feels consistent.
+                MenuUIRect dropdownRect = MenuUIRectMake(aiRect.x, dropdownY, aiRect.width, LobbyMenuAIDropdownHeight());
+                if (MenuUIRectContains(&dropdownRect, x, y)) {
+                    clickedAIUI = true;
+
+                    if (canEditAI) {
+                        float listTop = dropdownRect.y + LOBBY_MENU_AI_DROPDOWN_PADDING;
+                        float relativeY = y - listTop;
+                        int entryIndex = (int)(relativeY / LOBBY_MENU_AI_ROW_HEIGHT);
+
+                        // Entry 0 is "None", remaining entries map to AI personalities.
+                        if (entryIndex >= 0 && entryIndex < (AI_PERSONALITY_COUNT + 1)) {
+                            int aiIndex = entryIndex - 1;
+                            LobbyMenuUISetSlotAI(state, i, aiIndex);
+
+                            // Queue a selection so the server can apply the choice.
+                            state->aiSelectionPending = true;
+                            state->aiSelectionSlotIndex = i;
+                            state->aiSelectionIndex = aiIndex;
+
+                            state->aiDropdownOpen = false;
+                            state->aiDropdownSlotIndex = -1;
+                            aiActionHandled = true;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Advance to the next slot row.
+            rowY += LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+            if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)i) {
+                rowY += LobbyMenuAIDropdownHeight();
+            }
+            if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+                rowY += ColorPickerUIHeight();
+            }
+        }
+    }
+
+    // If the AI dropdown is open but no AI UI was clicked, close it.
+    if (state->aiDropdownOpen && !clickedAIUI) {
+        state->aiDropdownOpen = false;
+        state->aiDropdownSlotIndex = -1;
+    }
+
+    // If an AI action was handled or the AI UI was clicked, we're done.
+    if (aiActionHandled || clickedAIUI) {
+        return;
+    }
+
     // Handle color picker interactions first (independent of editability).
     bool clickedColorUI = false;
     bool colorActionHandled = false;
@@ -922,6 +1113,11 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
                 // If editable, toggle the color picker for this slot.
                 if (canEdit) {
                     clickedColorUI = true;
+                    // Close any AI dropdown so the UI has only one dropdown open at a time.
+                    if (state->aiDropdownOpen) {
+                        state->aiDropdownOpen = false;
+                        state->aiDropdownSlotIndex = -1;
+                    }
                     // If the picker is already open for this slot, close it.
                     if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
                         ColorPickerUIClose(&state->colorPicker, true, state->slotColors[i], factionId);
@@ -982,6 +1178,9 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
             rowY += LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
             if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
                 rowY += ColorPickerUIHeight();
+            }
+            if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)i) {
+                rowY += LobbyMenuAIDropdownHeight();
             }
         }
     }
@@ -1251,6 +1450,28 @@ bool LobbyMenuUIConsumeColorCommit(LobbyMenuUIState *state, int *outFactionId, u
 }
 
 /**
+ * Consumes a pending AI selection from the lobby UI, if one exists.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outSlotIndex Output slot index whose AI selection changed.
+ * @param outAiIndex Output AI index selected, or -1 for none.
+ * @return True if a selection was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeAISelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outAiIndex) {
+    if (state == NULL || outSlotIndex == NULL || outAiIndex == NULL) {
+        return false;
+    }
+
+    if (!state->aiSelectionPending) {
+        return false;
+    }
+
+    *outSlotIndex = state->aiSelectionSlotIndex;
+    *outAiIndex = state->aiSelectionIndex;
+    state->aiSelectionPending = false;
+    return true;
+}
+
+/**
  * Renders the lobby menu UI using OpenGL.
  * Draws panels, input fields, buttons, and status messages.
  * @param state Pointer to the LobbyMenuUIState to render.
@@ -1337,9 +1558,22 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
             slotColor[2] = 0.6f;
         }
 
-        // Draw the slot line text centered vertically within the row.
-        float textY = rowY + (LOBBY_MENU_SLOT_ROW_HEIGHT / 2.0f) + (MENU_GENERIC_TEXT_HEIGHT / 2.0f);
-        DrawScreenText(context, line, slotArea.x, textY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
+        // Draw the slot line text near the top of the row so there is space for AI info.
+        float lineY = rowY + MENU_GENERIC_TEXT_HEIGHT;
+        DrawScreenText(context, line, slotArea.x, lineY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
+
+        // Draw a visible box for the AI selection so the click target is obvious.
+        MenuUIRect aiRect = LobbyMenuComputeAIRect(&slotArea, rowY);
+        float aiOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+        float aiFill[4] = MENU_INPUT_BOX_FILL_COLOR;
+        DrawOutlinedRectangle(aiRect.x, aiRect.y, aiRect.x + aiRect.width, aiRect.y + aiRect.height, aiOutline, aiFill);
+
+        // Draw the AI type label inside the selection box.
+        const char *aiName = LobbyMenuAINameFromIndex(state->slotAiIndex[i]);
+        char aiLine[96];
+        snprintf(aiLine, sizeof(aiLine), "AI Type: %s", aiName);
+        float aiLineY = aiRect.y + MENU_GENERIC_TEXT_HEIGHT + 2.0f;
+        DrawScreenText(context, aiLine, aiRect.x + 6.0f, aiLineY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
 
         // Draw the color swatch to the right side of the slot row.
         float swatchX = slotArea.x + slotArea.width - COLOR_PICKER_SWATCH_PADDING - COLOR_PICKER_SWATCH_SIZE;
@@ -1354,6 +1588,33 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
         }
         DrawOutlinedRectangle(swatchX, swatchY, swatchX + COLOR_PICKER_SWATCH_SIZE,
             swatchY + COLOR_PICKER_SWATCH_SIZE, swatchOutline, swatchFill);
+
+        // Draw the AI dropdown if this slot is active.
+        if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)i) {
+            float dropdownY = rowY + LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+            // We reuse the AI box width so the dropdown feels anchored to its trigger.
+            MenuUIRect dropdownRect = MenuUIRectMake(aiRect.x, dropdownY, aiRect.width, LobbyMenuAIDropdownHeight());
+
+            float dropdownOutline[4] = MENU_PANEL_OUTLINE_COLOR;
+            float dropdownFill[4] = MENU_PANEL_FILL_COLOR;
+            DrawOutlinedRectangle(dropdownRect.x, dropdownRect.y,
+                dropdownRect.x + dropdownRect.width, dropdownRect.y + dropdownRect.height,
+                dropdownOutline, dropdownFill);
+
+            float textX = dropdownRect.x + LOBBY_MENU_AI_DROPDOWN_PADDING;
+            float listTop = dropdownRect.y + LOBBY_MENU_AI_DROPDOWN_PADDING;
+
+            // Entry 0 is "None" followed by each registered AI personality.
+            for (int entry = 0; entry < (AI_PERSONALITY_COUNT + 1); ++entry) {
+                int aiIndex = entry - 1;
+                const char *entryName = LobbyMenuAINameFromIndex(aiIndex);
+                float entryY = listTop + (float)entry * LOBBY_MENU_AI_ROW_HEIGHT + MENU_GENERIC_TEXT_HEIGHT;
+                DrawScreenText(context, entryName, textX, entryY,
+                    MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, labelColor);
+            }
+
+            rowY += LobbyMenuAIDropdownHeight();
+        }
 
         // Draw the color picker dropdown if this slot is active.
         if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {

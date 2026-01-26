@@ -7,6 +7,7 @@
  */
 
 #include "Objects/faction.h"
+#include "AI/aiPersonality.h"
 
 /**
  * Helper function to set color components.
@@ -37,6 +38,8 @@ Faction CreateFaction(int id, float r, float g, float b) {
     Faction faction;
     faction.id = id;
     SetColorComponents(faction.color, r, g, b);
+    // Default to no AI so human control is the default.
+    faction.aiPersonality = NULL;
     return faction;
 }
 
@@ -53,4 +56,18 @@ void FactionSetColor(Faction *faction, float r, float g, float b) {
     }
 
     SetColorComponents(faction->color, r, g, b);
+}
+
+/**
+ * Assigns an AI personality to the faction or clears it for human control.
+ * @param faction A pointer to the Faction object to modify.
+ * @param personality Pointer to the AI personality to assign, or NULL for none.
+ */
+void FactionSetAIPersonality(Faction *faction, AIPersonality *personality) {
+    if (faction == NULL) {
+        return;
+    }
+
+    // We store the pointer directly so the AI personality registry stays authoritative.
+    faction->aiPersonality = personality;
 }

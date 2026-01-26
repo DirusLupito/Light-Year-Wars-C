@@ -32,6 +32,7 @@
 #include "Objects/planet.h"
 #include "Objects/starship.h"
 #include "Objects/player.h"
+#include "AI/aiPersonality.h"
 
 // Port number for the server to listen on
 #define SERVER_PORT 22311
