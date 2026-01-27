@@ -44,6 +44,8 @@ PlanetPair* basicAIDecideActions(struct AIPersonality *self, struct Level *level
         Planet *origin = &level->planets[i];
 
         // Only consider planets owned by the AI's faction.
+        // We won't issue order to planets held even by those
+        // we are sharing control with.
         if (origin->owner != faction) {
             continue;
         }
@@ -53,6 +55,10 @@ PlanetPair* basicAIDecideActions(struct AIPersonality *self, struct Level *level
             continue;
         }
 
+        // Note that the term "enemy" here is a misnomer;
+        // in reality this is the nearest planet not owned 
+        // by a faction sharing the same team number as the AI's faction.
+
         // Find the nearest enemy planet.
         Planet *nearestEnemy = NULL;
         float nearestDistanceSq = -1.0f;
@@ -60,8 +66,11 @@ PlanetPair* basicAIDecideActions(struct AIPersonality *self, struct Level *level
         for (size_t j = 0; j < level->planetCount; ++j) {
             Planet *destination = &level->planets[j];
 
-            // Skip planets owned by the AI's faction.
-            if (destination->owner == faction) {
+            // Skip planets owned by the AI's faction
+            // and those allied via team association.
+            if (destination->owner == faction ||
+                (destination->owner != NULL &&
+                 FactionIsFriendly(destination->owner, faction))) {
                 continue;
             }
 
