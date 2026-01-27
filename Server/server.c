@@ -74,6 +74,8 @@ static const Faction *FindAvailableFaction(void);
 static Player *EnsurePlayerForAddress(const SOCKADDR_IN *address, const char *playerName);
 static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static void HandleLobbyColorPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
+static void HandleLobbyTeamPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
+static void HandleLobbySharedControlPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size);
 static bool LaunchFleetAndBroadcast(Planet *origin, Planet *destination);
 static void RemovePlayer(Player *player);
 static void UpdatePlayerTimeouts(float deltaTime);
@@ -318,6 +320,12 @@ static bool ConfigureLobbyFactions(size_t factionCount) {
             aiIndex = lobbyMenuUI.slotAiIndex[i];
         }
         FactionSetAIPersonality(&level.factions[i], ResolveAIPersonalityByIndex(aiIndex));
+
+        // Reapply team metadata so the lobby configuration persists across reconfigurations.
+        if (i < lobbyMenuUI.slotCount) {
+            FactionSetTeamNumber(&level.factions[i], lobbyMenuUI.slotTeamNumber[i]);
+            FactionSetSharedControlNumber(&level.factions[i], lobbyMenuUI.slotSharedControlNumber[i]);
+        }
     }
 
     // Set the level dimensions based on the current lobby settings.
@@ -400,6 +408,12 @@ static void RefreshLobbySlots(void) {
         // Update the slot info in the lobby UI.
         LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, (int)i, occupied, occupantName);
         LobbyMenuUISetSlotAI(&lobbyMenuUI, i, aiIndex);
+
+        // Keep team metadata aligned with the underlying factions.
+        if (level.factions != NULL && i < level.factionCount) {
+            LobbyMenuUISetSlotTeam(&lobbyMenuUI, i, level.factions[i].teamNumber);
+            LobbyMenuUISetSlotSharedControl(&lobbyMenuUI, i, level.factions[i].sharedControlNumber);
+        }
 
         // Also set the slot color based on the faction color.
         if (level.factions != NULL && i < level.factionCount) {
@@ -613,11 +627,15 @@ static void BuildLobbyPacket(LevelLobbyStatePacket *packet, LevelLobbySlotInfo *
         memset(&slots[i], 0, sizeof(LevelLobbySlotInfo));
         slots[i].factionId = (int32_t)i;
         slots[i].aiIndex = -1;
+        slots[i].teamNumber = FACTION_TEAM_NONE;
+        slots[i].sharedControlNumber = FACTION_SHARED_CONTROL_NONE;
         slots[i].occupied = 0u;
 
         if (i < level.factionCount && level.factions != NULL) {
             memcpy(slots[i].color, level.factions[i].color, sizeof(slots[i].color));
             slots[i].aiIndex = FindAIPersonalityIndex(level.factions[i].aiPersonality);
+            slots[i].teamNumber = level.factions[i].teamNumber;
+            slots[i].sharedControlNumber = level.factions[i].sharedControlNumber;
         }
 
         // Mark slots occupied by humans first so AI cannot override their status.
@@ -756,6 +774,26 @@ static void ProcessLobbyUI(void) {
             lobbyStateDirty = true;
         }
     }
+
+    // Apply any committed team number edits from the server lobby UI.
+    size_t teamSlotIndex = 0;
+    int teamNumber = FACTION_TEAM_NONE;
+    if (LobbyMenuUIConsumeTeamSelection(&lobbyMenuUI, &teamSlotIndex, &teamNumber)) {
+        if (level.factions != NULL && teamSlotIndex < level.factionCount) {
+            FactionSetTeamNumber(&level.factions[teamSlotIndex], teamNumber);
+            lobbyStateDirty = true;
+        }
+    }
+
+    // Apply any committed shared control edits from the server lobby UI.
+    size_t controlSlotIndex = 0;
+    int sharedControlNumber = FACTION_SHARED_CONTROL_NONE;
+    if (LobbyMenuUIConsumeSharedControlSelection(&lobbyMenuUI, &controlSlotIndex, &sharedControlNumber)) {
+        if (level.factions != NULL && controlSlotIndex < level.factionCount) {
+            FactionSetSharedControlNumber(&level.factions[controlSlotIndex], sharedControlNumber);
+            lobbyStateDirty = true;
+        }
+    }
 }
 
 /**
@@ -800,6 +838,10 @@ static bool AttemptStartGame(void) {
                 size_t colorSize = sizeof(level.factions[i].color);
                 memcpy(existingFactions[i].color, level.factions[i].color, colorSize);
                 existingFactions[i].aiPersonality = level.factions[i].aiPersonality;
+                // Preserve team metadata so friendly rules do not reset on game start.
+                existingFactions[i].teamNumber = level.factions[i].teamNumber;
+                // Preserve shared control metadata so command permissions remain consistent.
+                existingFactions[i].sharedControlNumber = level.factions[i].sharedControlNumber;
             }
         }
     }
@@ -844,6 +886,11 @@ static bool AttemptStartGame(void) {
 
             // Preserve AI assignments so AI slots remain consistent during game start.
             newFaction->aiPersonality = existing->aiPersonality;
+
+            // Restore team metadata so friendly checks reflect lobby choices.
+            newFaction->teamNumber = existing->teamNumber;
+            // Restore shared control metadata so cross-faction control is preserved.
+            newFaction->sharedControlNumber = existing->sharedControlNumber;
         }
 
         // We can now free the temporary storage.
@@ -1442,6 +1489,88 @@ static void HandleLobbyColorPacket(const SOCKADDR_IN *sender, const uint8_t *dat
 }
 
 /**
+ * Processes a lobby team update packet received from a client.
+ * Valid only during the lobby stage and for the sender's own faction.
+ * @param sender Address of the client that sent the packet.
+ * @param data Pointer to the packet data.
+ * @param size Size of the packet data.
+ */
+static void HandleLobbyTeamPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size) {
+    if (sender == NULL || data == NULL || size < sizeof(LevelLobbyTeamPacket)) {
+        return;
+    }
+
+    if (currentStage != SERVER_STAGE_LOBBY) {
+        return;
+    }
+
+    const LevelLobbyTeamPacket *packet = (const LevelLobbyTeamPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_LOBBY_TEAM) {
+        return;
+    }
+
+    Player *player = FindPlayerByAddress(sender);
+    if (player == NULL || player->faction == NULL) {
+        return;
+    }
+
+    // Clients may only edit their own faction metadata.
+    if (player->factionId != packet->factionId) {
+        return;
+    }
+
+    if (packet->factionId < 0 || (size_t)packet->factionId >= level.factionCount || level.factions == NULL) {
+        return;
+    }
+
+    // Apply the team number and mirror it to the lobby UI so the host sees changes.
+    FactionSetTeamNumber(&level.factions[packet->factionId], packet->teamNumber);
+    LobbyMenuUISetSlotTeam(&lobbyMenuUI, (size_t)packet->factionId, packet->teamNumber);
+    lobbyStateDirty = true;
+}
+
+/**
+ * Processes a lobby shared control update packet received from a client.
+ * Valid only during the lobby stage and for the sender's own faction.
+ * @param sender Address of the client that sent the packet.
+ * @param data Pointer to the packet data.
+ * @param size Size of the packet data.
+ */
+static void HandleLobbySharedControlPacket(const SOCKADDR_IN *sender, const uint8_t *data, size_t size) {
+    if (sender == NULL || data == NULL || size < sizeof(LevelLobbySharedControlPacket)) {
+        return;
+    }
+
+    if (currentStage != SERVER_STAGE_LOBBY) {
+        return;
+    }
+
+    const LevelLobbySharedControlPacket *packet = (const LevelLobbySharedControlPacket *)data;
+    if (packet->type != LEVEL_PACKET_TYPE_LOBBY_SHARED_CONTROL) {
+        return;
+    }
+
+    Player *player = FindPlayerByAddress(sender);
+    if (player == NULL || player->faction == NULL) {
+        return;
+    }
+
+    // Clients may only edit their own faction metadata.
+    if (player->factionId != packet->factionId) {
+        return;
+    }
+
+    if (packet->factionId < 0 || (size_t)packet->factionId >= level.factionCount || level.factions == NULL) {
+        return;
+    }
+
+    // Apply shared control metadata and mirror it in the host lobby UI.
+    FactionSetSharedControlNumber(&level.factions[packet->factionId], packet->sharedControlNumber);
+    LobbyMenuUISetSlotSharedControl(&lobbyMenuUI, (size_t)packet->factionId, packet->sharedControlNumber);
+    lobbyStateDirty = true;
+}
+
+/**
  * Launches a fleet from the origin planet to the destination planet
  * and broadcasts the launch to all connected players to allow their
  * clients to simulate the fleet movement.
@@ -1612,8 +1741,8 @@ static void HandleMoveOrderPacket(const SOCKADDR_IN *sender, const uint8_t *data
 
         Planet *origin = &level.planets[originIndex];
 
-        // A planet not owned by the player's faction is invalid.
-        if (origin->owner != player->faction) {
+        // A planet not owned or shared-controlled by the player's faction is invalid.
+        if (origin->owner == NULL || !FactionSharesControl(player->faction, origin->owner)) {
             continue;
         }
 
@@ -1895,6 +2024,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                     handled = true;
                 } else if (packetType == LEVEL_PACKET_TYPE_LOBBY_COLOR) {
                     HandleLobbyColorPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
+                    handled = true;
+                } else if (packetType == LEVEL_PACKET_TYPE_LOBBY_TEAM) {
+                    HandleLobbyTeamPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
+                    handled = true;
+                } else if (packetType == LEVEL_PACKET_TYPE_LOBBY_SHARED_CONTROL) {
+                    HandleLobbySharedControlPacket(&sender_address, (const uint8_t *)recv_buffer, (size_t)bytes_received);
                     handled = true;
                 } else if (packetType == LEVEL_PACKET_TYPE_CLIENT_DISCONNECT) {
                     // It's a disconnect notice from a client.

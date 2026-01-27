@@ -81,7 +81,7 @@ void PlayerSelectionFree(PlayerSelectionState *state);
 bool PlayerSelectionSet(PlayerSelectionState *state, size_t index, bool selected);
 
 /**
- * Selects all planets owned by the specified faction.
+ * Selects all planets owned or shared-controlled by the specified faction.
  * @param state Pointer to the PlayerSelectionState to update.
  * @param level Pointer to the current Level structure.
  * @param owner Pointer to the owning faction.
@@ -147,7 +147,8 @@ bool PlayerControlGroupsAdd(PlayerControlGroups *groups,
     const PlayerSelectionState *selection);
 
 /**
- * Applies the specified control group to the current selection, filtering by ownership.
+ * Applies the specified control group to the current selection, filtering by ownership
+ * and shared control permissions.
  * @param groups Pointer to the PlayerControlGroups to read from.
  * @param groupIndex Index of the control group (0-9).
  * @param level Pointer to the current Level structure.

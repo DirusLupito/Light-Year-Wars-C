@@ -77,9 +77,20 @@
 // Spacing between sections in the lobby menu.
 #define LOBBY_MENU_SECTION_SPACING 30.0f
 
+// Height of the small input boxes inside each slot row.
+// We keep this consistent with the AI box so the slot layout feels uniform.
+#define LOBBY_MENU_SLOT_INPUT_HEIGHT (MENU_GENERIC_TEXT_HEIGHT + 6.0f)
+
+// Vertical spacing between stacked slot row elements.
+#define LOBBY_MENU_SLOT_INPUT_SPACING 6.0f
+
+// Horizontal spacing between the team and shared control input boxes.
+#define LOBBY_MENU_SLOT_INPUT_HORIZONTAL_SPACING 8.0f
+
 // Height of each slot row in the lobby menu.
-// We reserve extra vertical space so slot details can include AI text.
-#define LOBBY_MENU_SLOT_ROW_HEIGHT 44.0f
+// This accounts for the slot label, team/shared control inputs, and AI selector.
+#define LOBBY_MENU_SLOT_ROW_HEIGHT (MENU_GENERIC_TEXT_HEIGHT + LOBBY_MENU_SLOT_INPUT_SPACING + \
+    LOBBY_MENU_SLOT_INPUT_HEIGHT + LOBBY_MENU_SLOT_INPUT_SPACING + LOBBY_MENU_SLOT_INPUT_HEIGHT)
 
 // Spacing between slot rows in the lobby menu.
 #define LOBBY_MENU_SLOT_ROW_SPACING 6.0f
@@ -92,6 +103,12 @@
 
 // Vertical spacing between the slot text and the AI line.
 #define LOBBY_MENU_AI_TEXT_SPACING 6.0f
+
+// Maximum length of per-slot team number inputs.
+#define LOBBY_MENU_TEAM_INPUT_MAX_LENGTH 6
+
+// Maximum length of per-slot shared control inputs.
+#define LOBBY_MENU_SHARED_CONTROL_INPUT_MAX_LENGTH 6
 
 // Horizontal spacing between the lobby panel and preview panel.
 #define LOBBY_MENU_PREVIEW_PANEL_MARGIN 24.0f
@@ -174,6 +191,8 @@ typedef struct LobbyMenuUIState {
     bool slotOccupied[LOBBY_MENU_MAX_SLOTS];
     char slotNames[LOBBY_MENU_MAX_SLOTS][PLAYER_NAME_MAX_LENGTH + 1];
     int slotAiIndex[LOBBY_MENU_MAX_SLOTS];
+    int slotTeamNumber[LOBBY_MENU_MAX_SLOTS];
+    int slotSharedControlNumber[LOBBY_MENU_MAX_SLOTS];
     int highlightedFactionId; /* Slot to highlight (e.g. local faction). */
 
     /* Slot colors (RGBA 0-1) for display and editing. */
@@ -184,6 +203,23 @@ typedef struct LobbyMenuUIState {
     bool aiSelectionPending; /* True when a new AI selection is waiting to be consumed. */
     size_t aiSelectionSlotIndex; /* Slot index associated with the pending AI selection. */
     int aiSelectionIndex; /* AI index selected from the dropdown, or -1 for none. */
+
+    bool teamSelectionPending; /* True when a team edit is waiting to be consumed. */
+    size_t teamSelectionSlotIndex; /* Slot index associated with the pending team selection. */
+    int teamSelectionValue; /* Parsed team number, or -1 for none. */
+
+    bool sharedControlSelectionPending; /* True when a shared control edit is waiting to be consumed. */
+    size_t sharedControlSelectionSlotIndex; /* Slot index for the pending shared control selection. */
+    int sharedControlSelectionValue; /* Parsed shared control number, or -1 for none. */
+
+    int slotInputFocusIndex; /* Slot index currently receiving numeric input, or -1. */
+    bool slotInputFocusTeam; /* True when the focused slot input is the team field. */
+    bool slotInputFocusSharedControl; /* True when the focused slot input is the shared control field. */
+
+    char slotTeamText[LOBBY_MENU_MAX_SLOTS][LOBBY_MENU_TEAM_INPUT_MAX_LENGTH + 1];
+    size_t slotTeamLength[LOBBY_MENU_MAX_SLOTS];
+    char slotSharedControlText[LOBBY_MENU_MAX_SLOTS][LOBBY_MENU_SHARED_CONTROL_INPUT_MAX_LENGTH + 1];
+    size_t slotSharedControlLength[LOBBY_MENU_MAX_SLOTS];
 
     /* Color picker state for RGB selection. */
     ColorPickerUIState colorPicker;
@@ -290,6 +326,34 @@ void LobbyMenuUISetSlotInfo(LobbyMenuUIState *state, size_t index, int factionId
  * @param aiIndex Index of the AI personality, or -1 for none.
  */
 void LobbyMenuUISetSlotAI(LobbyMenuUIState *state, size_t index, int aiIndex);
+
+/**
+ * Sets the team number for a specific lobby slot.
+ * A negative value clears the team assignment.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param teamNumber The team number to assign, or a negative value for none.
+ */
+void LobbyMenuUISetSlotTeam(LobbyMenuUIState *state, size_t index, int teamNumber);
+
+/**
+ * Sets the shared control number for a specific lobby slot.
+ * A negative value clears the shared control assignment.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param sharedControlNumber The shared control number, or a negative value for none.
+ */
+void LobbyMenuUISetSlotSharedControl(LobbyMenuUIState *state, size_t index, int sharedControlNumber);
+
+/**
+ * Sets focus on a specific slot input field.
+ * This is used to restore focus after authoritative lobby refreshes.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param slotIndex Slot index to focus.
+ * @param focusTeam True to focus the team field.
+ * @param focusShared True to focus the shared control field.
+ */
+void LobbyMenuUISetSlotInputFocus(LobbyMenuUIState *state, size_t slotIndex, bool focusTeam, bool focusShared);
 
 /**
  * Sets the display color for a specific lobby slot.
@@ -403,6 +467,24 @@ bool LobbyMenuUIConsumeColorCommit(LobbyMenuUIState *state, int *outFactionId, u
  * @return True if a selection was pending, false otherwise.
  */
 bool LobbyMenuUIConsumeAISelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outAiIndex);
+
+/**
+ * Consumes a pending team selection from the lobby UI, if one exists.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outSlotIndex Output slot index whose team selection changed.
+ * @param outTeamNumber Output team number, or -1 for none.
+ * @return True if a selection was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeTeamSelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outTeamNumber);
+
+/**
+ * Consumes a pending shared control selection from the lobby UI, if one exists.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outSlotIndex Output slot index whose shared control selection changed.
+ * @param outSharedControlNumber Output shared control number, or -1 for none.
+ * @return True if a selection was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeSharedControlSelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outSharedControlNumber);
 
 /**
  * Renders the lobby menu UI using OpenGL.

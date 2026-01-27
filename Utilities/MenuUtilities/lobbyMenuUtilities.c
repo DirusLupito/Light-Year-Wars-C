@@ -51,6 +51,49 @@ static const char *LobbyMenuAINameFromIndex(int aiIndex) {
 }
 
 /**
+ * Computes the rectangle used for the team number input box.
+ * @param slotArea Pointer to the slot area rectangle.
+ * @param rowY The Y position of the current slot row.
+ * @return The rectangle covering the team input box.
+ */
+static MenuUIRect LobbyMenuComputeTeamRect(const MenuUIRect *slotArea, float rowY) {
+    // We reserve horizontal space for the color swatch to avoid overlap.
+    float swatchX = slotArea->x + slotArea->width - COLOR_PICKER_SWATCH_PADDING - COLOR_PICKER_SWATCH_SIZE;
+    float availableWidth = swatchX - slotArea->x - 6.0f;
+    if (availableWidth < 1.0f) {
+        availableWidth = slotArea->width;
+    }
+
+    float boxWidth = (availableWidth - LOBBY_MENU_SLOT_INPUT_HORIZONTAL_SPACING) * 0.5f;
+    if (boxWidth < 40.0f) {
+        // If the panel is too narrow, fall back to a single full-width box.
+        boxWidth = availableWidth;
+    }
+
+    float inputY = rowY + MENU_GENERIC_TEXT_HEIGHT + LOBBY_MENU_SLOT_INPUT_SPACING;
+    return MenuUIRectMake(slotArea->x, inputY, boxWidth, LOBBY_MENU_SLOT_INPUT_HEIGHT);
+}
+
+/**
+ * Computes the rectangle used for the shared control input box.
+ * @param slotArea Pointer to the slot area rectangle.
+ * @param rowY The Y position of the current slot row.
+ * @return The rectangle covering the shared control input box.
+ */
+static MenuUIRect LobbyMenuComputeSharedControlRect(const MenuUIRect *slotArea, float rowY) {
+    MenuUIRect teamRect = LobbyMenuComputeTeamRect(slotArea, rowY);
+
+    // If the team rect spans the full width, align shared control below it.
+    if (teamRect.width >= slotArea->width - 1.0f) {
+        float sharedY = teamRect.y + teamRect.height + LOBBY_MENU_SLOT_INPUT_SPACING;
+        return MenuUIRectMake(teamRect.x, sharedY, teamRect.width, teamRect.height);
+    }
+
+    float sharedX = teamRect.x + teamRect.width + LOBBY_MENU_SLOT_INPUT_HORIZONTAL_SPACING;
+    return MenuUIRectMake(sharedX, teamRect.y, teamRect.width, teamRect.height);
+}
+
+/**
  * Computes the rectangle used for the AI type display and click target.
  * @param slotArea Pointer to the slot area rectangle.
  * @param rowY The Y position of the current slot row.
@@ -64,9 +107,10 @@ static MenuUIRect LobbyMenuComputeAIRect(const MenuUIRect *slotArea, float rowY)
         width = slotArea->width;
     }
 
-    float aiLineY = rowY + MENU_GENERIC_TEXT_HEIGHT + MENU_GENERIC_TEXT_HEIGHT + LOBBY_MENU_AI_TEXT_SPACING;
-    float height = MENU_GENERIC_TEXT_HEIGHT + 6.0f;
-    return MenuUIRectMake(slotArea->x, aiLineY - MENU_GENERIC_TEXT_HEIGHT, width, height);
+    // Position the AI box below the team/shared control inputs.
+    MenuUIRect sharedRect = LobbyMenuComputeSharedControlRect(slotArea, rowY);
+    float aiY = sharedRect.y + sharedRect.height + LOBBY_MENU_AI_TEXT_SPACING;
+    return MenuUIRectMake(slotArea->x, aiY, width, LOBBY_MENU_SLOT_INPUT_HEIGHT);
 }
 
 /**
@@ -266,6 +310,186 @@ static void SetFieldText(LobbyMenuUIState *state, size_t index, const char *text
 
     // Update the field length.
     state->fieldLength[index] = strlen(state->fieldText[index]);
+}
+
+/**
+ * Formats a slot number into a text buffer or clears it for "none" values.
+ * @param buffer Output buffer for the formatted text.
+ * @param capacity Total capacity of the buffer including null terminator.
+ * @param length Pointer to receive the updated length.
+ * @param value The numeric value to format, or a negative value for empty.
+ */
+static void LobbyMenuSetSlotNumberText(char *buffer, size_t capacity, size_t *length, int value) {
+    if (buffer == NULL || capacity == 0 || length == NULL) {
+        return;
+    }
+
+    // A negative value signals that the field should appear empty.
+    if (value < 0) {
+        buffer[0] = '\0';
+        *length = 0u;
+        return;
+    }
+
+    // We format as a plain integer so the UI stays concise.
+    snprintf(buffer, capacity, "%d", value);
+    buffer[capacity - 1] = '\0';
+    *length = strlen(buffer);
+}
+
+/**
+ * Parses a slot number text buffer into an integer.
+ * Empty or invalid strings return a sentinel of -1.
+ * @param text Null-terminated string to parse.
+ * @return Parsed integer, or -1 when no value is present.
+ */
+static int LobbyMenuParseSlotNumber(const char *text) {
+    if (text == NULL || text[0] == '\0') {
+        return -1;
+    }
+
+    char *endPtr = NULL;
+    long value = strtol(text, &endPtr, 10);
+    if (endPtr == NULL || *endPtr != '\0') {
+        // Invalid text should behave like empty input so it does not commit.
+        return -1;
+    }
+
+    if (value < 0) {
+        return -1;
+    }
+
+    return (int)value;
+}
+
+/**
+ * Appends a digit to a slot number buffer if there is capacity.
+ * @param buffer Output buffer to edit.
+ * @param capacity Total buffer capacity including null terminator.
+ * @param length Pointer to the current length to update.
+ * @param codepoint Unicode codepoint of the typed character.
+ * @return true if a character was appended, false otherwise.
+ */
+static bool LobbyMenuAppendSlotNumberChar(char *buffer, size_t capacity, size_t *length, unsigned int codepoint) {
+    if (buffer == NULL || length == NULL || capacity == 0) {
+        return false;
+    }
+
+    // Only accept digits so the field remains numeric.
+    if (codepoint < '0' || codepoint > '9') {
+        return false;
+    }
+
+    // Ensure there is room for the new digit and null terminator.
+    if (*length >= capacity - 1) {
+        return false;
+    }
+
+    buffer[*length] = (char)codepoint;
+    *length += 1;
+    buffer[*length] = '\0';
+    return true;
+}
+
+/**
+ * Removes the last digit from a slot number buffer.
+ * @param buffer Output buffer to edit.
+ * @param length Pointer to the current length to update.
+ */
+static void LobbyMenuBackspaceSlotNumber(char *buffer, size_t *length) {
+    if (buffer == NULL || length == NULL) {
+        return;
+    }
+
+    if (*length == 0) {
+        return;
+    }
+
+    *length -= 1;
+    buffer[*length] = '\0';
+}
+
+/**
+ * Clears focus from any slot input field.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ */
+static void LobbyMenuClearSlotInputFocus(LobbyMenuUIState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->slotInputFocusIndex = -1;
+    state->slotInputFocusTeam = false;
+    state->slotInputFocusSharedControl = false;
+}
+
+/**
+ * Sets focus on a specific slot input field.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param slotIndex Slot index to focus.
+ * @param focusTeam True to focus the team field.
+ * @param focusShared True to focus the shared control field.
+ */
+static void LobbyMenuSetSlotInputFocus(LobbyMenuUIState *state, size_t slotIndex, bool focusTeam, bool focusShared) {
+    if (state == NULL) {
+        return;
+    }
+
+    // We only allow a single slot input focus at a time.
+    state->slotInputFocusIndex = (int)slotIndex;
+    state->slotInputFocusTeam = focusTeam;
+    state->slotInputFocusSharedControl = focusShared;
+}
+
+/**
+ * Determines whether the caller can edit team/shared control metadata for a slot.
+ * Read-only clients may edit their own slot, while the server host can edit all slots.
+ * @param state Pointer to the LobbyMenuUIState to read.
+ * @param slotIndex Slot index to test.
+ * @return true if the slot can be edited, false otherwise.
+ */
+static bool LobbyMenuCanEditSlotMeta(const LobbyMenuUIState *state, size_t slotIndex) {
+    if (state == NULL || slotIndex >= state->slotCount) {
+        return false;
+    }
+
+    // The host can edit all slots.
+    if (state->editable) {
+        return true;
+    }
+
+    // Read-only clients can edit their own slot only.
+    if (state->highlightedFactionId < 0) {
+        return false;
+    }
+
+    return state->slotFactionIds[slotIndex] == state->highlightedFactionId;
+}
+
+/**
+ * Parses the focused slot input text and queues a pending selection update.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param slotIndex Slot index containing the edited value.
+ * @param isTeam True when editing the team field, false for shared control.
+ */
+static void LobbyMenuQueueSlotNumberSelection(LobbyMenuUIState *state, size_t slotIndex, bool isTeam) {
+    if (state == NULL || slotIndex >= LOBBY_MENU_MAX_SLOTS) {
+        return;
+    }
+
+    if (isTeam) {
+        int parsed = LobbyMenuParseSlotNumber(state->slotTeamText[slotIndex]);
+        state->slotTeamNumber[slotIndex] = parsed;
+        state->teamSelectionPending = true;
+        state->teamSelectionSlotIndex = slotIndex;
+        state->teamSelectionValue = parsed;
+    } else {
+        int parsed = LobbyMenuParseSlotNumber(state->slotSharedControlText[slotIndex]);
+        state->slotSharedControlNumber[slotIndex] = parsed;
+        state->sharedControlSelectionPending = true;
+        state->sharedControlSelectionSlotIndex = slotIndex;
+        state->sharedControlSelectionValue = parsed;
+    }
 }
 
 /**
@@ -520,6 +744,13 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
     state->aiSelectionPending = false;
     state->aiSelectionSlotIndex = 0;
     state->aiSelectionIndex = -1;
+    state->teamSelectionPending = false;
+    state->teamSelectionSlotIndex = 0;
+    state->teamSelectionValue = -1;
+    state->sharedControlSelectionPending = false;
+    state->sharedControlSelectionSlotIndex = 0;
+    state->sharedControlSelectionValue = -1;
+    LobbyMenuClearSlotInputFocus(state);
     LobbyMenuUpdatePreviewButtonLabel(state);
 
     // Reset picker state so there is no stale interaction or pending commits.
@@ -532,6 +763,12 @@ void LobbyMenuUIInitialize(LobbyMenuUIState *state, bool editable) {
         state->slotColors[i][3] = 1.0f;
         state->slotColorValid[i] = false;
         state->slotAiIndex[i] = -1;
+        state->slotTeamNumber[i] = -1;
+        state->slotSharedControlNumber[i] = -1;
+        state->slotTeamText[i][0] = '\0';
+        state->slotTeamLength[i] = 0u;
+        state->slotSharedControlText[i][0] = '\0';
+        state->slotSharedControlLength[i] = 0u;
     }
 }
 
@@ -555,6 +792,7 @@ void LobbyMenuUISetEditable(LobbyMenuUIState *state, bool editable) {
     if (!editable) {
         // If making read-only, clear focus and button states.
         LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+        LobbyMenuClearSlotInputFocus(state);
         state->startButtonPressed = false;
         state->startButton.pressed = false;
     }
@@ -816,6 +1054,12 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount) {
         state->slotColorValid[i] = false;
         state->slotNames[i][0] = '\0';
         state->slotAiIndex[i] = -1;
+        state->slotTeamNumber[i] = -1;
+        state->slotSharedControlNumber[i] = -1;
+        state->slotTeamText[i][0] = '\0';
+        state->slotTeamLength[i] = 0u;
+        state->slotSharedControlText[i][0] = '\0';
+        state->slotSharedControlLength[i] = 0u;
     }
 
     // Update the slot count.
@@ -825,6 +1069,11 @@ void LobbyMenuUISetSlotCount(LobbyMenuUIState *state, size_t slotCount) {
     if (state->aiDropdownOpen && (state->aiDropdownSlotIndex < 0 || state->aiDropdownSlotIndex >= (int)slotCount)) {
         state->aiDropdownOpen = false;
         state->aiDropdownSlotIndex = -1;
+    }
+
+    // Clear slot input focus if it targets an invalid slot.
+    if (state->slotInputFocusIndex < 0 || state->slotInputFocusIndex >= (int)slotCount) {
+        LobbyMenuClearSlotInputFocus(state);
     }
 }
 
@@ -886,6 +1135,68 @@ void LobbyMenuUISetSlotAI(LobbyMenuUIState *state, size_t index, int aiIndex) {
         state->aiDropdownOpen = false;
         state->aiDropdownSlotIndex = -1;
     }
+}
+
+/**
+ * Sets the team number for a specific lobby slot.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param teamNumber The team number to assign, or a negative value for none.
+ */
+void LobbyMenuUISetSlotTeam(LobbyMenuUIState *state, size_t index, int teamNumber) {
+    if (state == NULL || index >= LOBBY_MENU_MAX_SLOTS) {
+        return;
+    }
+
+    // Normalize negative values to the "no team" sentinel.
+    int normalized = teamNumber >= 0 ? teamNumber : -1;
+    state->slotTeamNumber[index] = normalized;
+    LobbyMenuSetSlotNumberText(state->slotTeamText[index], sizeof(state->slotTeamText[index]),
+        &state->slotTeamLength[index], normalized);
+}
+
+/**
+ * Sets the shared control number for a specific lobby slot.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param index Index of the slot to update (0 to LOBBY_MENU_MAX_SLOTS - 1).
+ * @param sharedControlNumber The shared control number, or a negative value for none.
+ */
+void LobbyMenuUISetSlotSharedControl(LobbyMenuUIState *state, size_t index, int sharedControlNumber) {
+    if (state == NULL || index >= LOBBY_MENU_MAX_SLOTS) {
+        return;
+    }
+
+    // Normalize negative values to the "no shared control" sentinel.
+    int normalized = sharedControlNumber >= 0 ? sharedControlNumber : -1;
+    state->slotSharedControlNumber[index] = normalized;
+    LobbyMenuSetSlotNumberText(state->slotSharedControlText[index], sizeof(state->slotSharedControlText[index]),
+        &state->slotSharedControlLength[index], normalized);
+}
+
+/**
+ * Sets focus on a specific slot input field.
+ * This is used to restore focus after authoritative lobby refreshes.
+ * @param state Pointer to the LobbyMenuUIState to modify.
+ * @param slotIndex Slot index to focus.
+ * @param focusTeam True to focus the team field.
+ * @param focusShared True to focus the shared control field.
+ */
+void LobbyMenuUISetSlotInputFocus(LobbyMenuUIState *state, size_t slotIndex, bool focusTeam, bool focusShared) {
+    if (state == NULL) {
+        return;
+    }
+
+    // We reject out-of-range slots so focus cannot point to stale UI after refresh.
+    if (slotIndex >= state->slotCount) {
+        return;
+    }
+
+    // We require an explicit target so focus never becomes ambiguous.
+    if (!focusTeam && !focusShared) {
+        return;
+    }
+
+    LobbyMenuSetSlotInputFocus(state, slotIndex, focusTeam, focusShared);
 }
 
 /**
@@ -955,12 +1266,21 @@ void LobbyMenuUIClearSlots(LobbyMenuUIState *state) {
         state->slotColorValid[i] = false;
         state->slotNames[i][0] = '\0';
         state->slotAiIndex[i] = -1;
+        state->slotTeamNumber[i] = -1;
+        state->slotSharedControlNumber[i] = -1;
+        state->slotTeamText[i][0] = '\0';
+        state->slotTeamLength[i] = 0u;
+        state->slotSharedControlText[i][0] = '\0';
+        state->slotSharedControlLength[i] = 0u;
     }
 
     // Close any open AI dropdown to avoid stale interactions.
     state->aiDropdownOpen = false;
     state->aiDropdownSlotIndex = -1;
     state->aiSelectionPending = false;
+    state->teamSelectionPending = false;
+    state->sharedControlSelectionPending = false;
+    LobbyMenuClearSlotInputFocus(state);
 }
 
 /**
@@ -1044,6 +1364,69 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     // Figure out where everything is laid out.
     ComputeLayout(state, width, height, scrollOffset, &panel, &slotArea);
 
+    // Handle team/shared control input clicks before dropdowns so focus is deterministic.
+    bool clickedSlotInput = false;
+    if (state->slotCount > 0) {
+        float rowY = slotArea.y;
+        for (size_t i = 0; i < state->slotCount; ++i) {
+            MenuUIRect teamRect = LobbyMenuComputeTeamRect(&slotArea, rowY);
+            MenuUIRect sharedRect = LobbyMenuComputeSharedControlRect(&slotArea, rowY);
+
+            if (MenuUIRectContains(&teamRect, x, y)) {
+                clickedSlotInput = true;
+                if (LobbyMenuCanEditSlotMeta(state, i)) {
+                    // Close dropdowns so the input focus remains visually clear.
+                    if (state->aiDropdownOpen) {
+                        state->aiDropdownOpen = false;
+                        state->aiDropdownSlotIndex = -1;
+                    }
+                    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+                        int openFactionId = state->slotFactionIds[state->colorPicker.slotIndex];
+                        ColorPickerUIClose(&state->colorPicker, true, state->slotColors[state->colorPicker.slotIndex], openFactionId);
+                    }
+
+                    // Clear main field focus so keyboard input targets the slot input.
+                    LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+                    LobbyMenuSetSlotInputFocus(state, i, true, false);
+                }
+                break;
+            }
+
+            if (MenuUIRectContains(&sharedRect, x, y)) {
+                clickedSlotInput = true;
+                if (LobbyMenuCanEditSlotMeta(state, i)) {
+                    // Close dropdowns so the input focus remains visually clear.
+                    if (state->aiDropdownOpen) {
+                        state->aiDropdownOpen = false;
+                        state->aiDropdownSlotIndex = -1;
+                    }
+                    if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
+                        int openFactionId = state->slotFactionIds[state->colorPicker.slotIndex];
+                        ColorPickerUIClose(&state->colorPicker, true, state->slotColors[state->colorPicker.slotIndex], openFactionId);
+                    }
+
+                    // Clear main field focus so keyboard input targets the slot input.
+                    LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+                    LobbyMenuSetSlotInputFocus(state, i, false, true);
+                }
+                break;
+            }
+
+            // Advance to the next slot row.
+            rowY += LOBBY_MENU_SLOT_ROW_HEIGHT + LOBBY_MENU_SLOT_ROW_SPACING;
+            if (state->aiDropdownOpen && state->aiDropdownSlotIndex == (int)i) {
+                rowY += LobbyMenuAIDropdownHeight();
+            }
+            if (state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
+                rowY += ColorPickerUIHeight();
+            }
+        }
+    }
+
+    if (clickedSlotInput) {
+        return;
+    }
+
     // Handle AI dropdown interactions before color picker logic so clicks are not misrouted.
     bool clickedAIUI = false;
     bool aiActionHandled = false;
@@ -1062,6 +1445,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
             // If the AI label was clicked, toggle the dropdown on the server.
             if (MenuUIRectContains(&aiRect, x, y)) {
                 clickedAIUI = true;
+                LobbyMenuClearSlotInputFocus(state);
                 if (canEditAI) {
                     // Close any open color picker so the layout stays deterministic.
                     if (state->colorPicker.open && state->colorPicker.slotIndex >= 0 && state->colorPicker.slotIndex < (int)state->slotCount) {
@@ -1088,6 +1472,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
                 MenuUIRect dropdownRect = MenuUIRectMake(aiRect.x, dropdownY, aiRect.width, LobbyMenuAIDropdownHeight());
                 if (MenuUIRectContains(&dropdownRect, x, y)) {
                     clickedAIUI = true;
+                    LobbyMenuClearSlotInputFocus(state);
 
                     if (canEditAI) {
                         float listTop = dropdownRect.y + LOBBY_MENU_AI_DROPDOWN_PADDING;
@@ -1158,6 +1543,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
                 // If editable, toggle the color picker for this slot.
                 if (canEdit) {
                     clickedColorUI = true;
+                    LobbyMenuClearSlotInputFocus(state);
                     // Close any AI dropdown so the UI has only one dropdown open at a time.
                     if (state->aiDropdownOpen) {
                         state->aiDropdownOpen = false;
@@ -1180,6 +1566,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
                 // If not editable, just note that the color UI was clicked.
                 if (!canEdit && state->colorPicker.open && state->colorPicker.slotIndex == (int)i) {
                     clickedColorUI = true;
+                    LobbyMenuClearSlotInputFocus(state);
                 }
                 break;
             }
@@ -1192,6 +1579,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
                 // Check if the click is within the picker area.
                 if (MenuUIRectContains(&pickerRect, x, y)) {
                     clickedColorUI = true;
+                    LobbyMenuClearSlotInputFocus(state);
 
                     float sliderX = pickerRect.x + COLOR_PICKER_PANEL_PADDING + COLOR_PICKER_SLIDER_LABEL_WIDTH;
                     float sliderWidth = pickerRect.width - (COLOR_PICKER_PANEL_PADDING * 2.0f) - COLOR_PICKER_SLIDER_LABEL_WIDTH;
@@ -1252,6 +1640,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     // If the click is outside the panel, clear focus and button states.
     if (!MenuUIRectContains(&panel, x, y)) {
         LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+        LobbyMenuClearSlotInputFocus(state);
         state->startButtonPressed = false;
         state->startButton.pressed = false;
         return;
@@ -1262,6 +1651,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     if (state->previewButtonPressed) {
         // Clear focus so the preview button press doesn't keep fields highlighted.
         LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+        LobbyMenuClearSlotInputFocus(state);
         return;
     }
 
@@ -1273,6 +1663,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
             // If the click is within this field, set focus to it.
             if (MenuUIRectContains(&state->inputFields[i].rect, x, y)) {
                 LobbyMenuSetFocus(state, (LobbyMenuFocusTarget)i);
+                LobbyMenuClearSlotInputFocus(state);
                 focusedField = true;
                 break;
             }
@@ -1280,6 +1671,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
 
         if (!focusedField) {
             LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+            LobbyMenuClearSlotInputFocus(state);
         }
 
         // If the click is within the start button, mark it as pressed.
@@ -1287,6 +1679,7 @@ void LobbyMenuUIHandleMouseDown(LobbyMenuUIState *state, float x, float y, int w
     } else {
         // Otherwise, if not editable, clear focus and button states.
         LobbyMenuSetFocus(state, LOBBY_MENU_FOCUS_NONE);
+        LobbyMenuClearSlotInputFocus(state);
         state->startButtonPressed = false;
         state->startButton.pressed = false;
     }
@@ -1388,7 +1781,40 @@ void LobbyMenuUIHandleScroll(LobbyMenuUIState *state, int height, float wheelSte
  */
 void LobbyMenuUIHandleChar(LobbyMenuUIState *state, unsigned int codepoint) {
     // Validate parameters.
-    if (state == NULL || !state->editable) {
+    if (state == NULL) {
+        return;
+    }
+
+    // Block non-editable input unless a slot field is authorized for editing.
+    if (!state->editable && state->slotInputFocusIndex < 0) {
+        return;
+    }
+
+    // If a slot input is focused, route numeric input there.
+    if (state->slotInputFocusIndex >= 0 && state->slotInputFocusIndex < (int)state->slotCount) {
+        size_t slotIndex = (size_t)state->slotInputFocusIndex;
+        if (!LobbyMenuCanEditSlotMeta(state, slotIndex)) {
+            // If permissions changed, clear focus so input does not leak to other slots.
+            LobbyMenuClearSlotInputFocus(state);
+            return;
+        }
+        bool changed = false;
+
+        if (state->slotInputFocusTeam) {
+            changed = LobbyMenuAppendSlotNumberChar(state->slotTeamText[slotIndex],
+                sizeof(state->slotTeamText[slotIndex]), &state->slotTeamLength[slotIndex], codepoint);
+            if (changed) {
+                LobbyMenuQueueSlotNumberSelection(state, slotIndex, true);
+            }
+        } else if (state->slotInputFocusSharedControl) {
+            changed = LobbyMenuAppendSlotNumberChar(state->slotSharedControlText[slotIndex],
+                sizeof(state->slotSharedControlText[slotIndex]), &state->slotSharedControlLength[slotIndex], codepoint);
+            if (changed) {
+                LobbyMenuQueueSlotNumberSelection(state, slotIndex, false);
+            }
+        }
+
+        // Slot inputs should not fall through to the main fields.
         return;
     }
 
@@ -1396,6 +1822,11 @@ void LobbyMenuUIHandleChar(LobbyMenuUIState *state, unsigned int codepoint) {
     int index = FocusToIndex(state->focus);
     if (index < 0 || index >= (int)LOBBY_MENU_FIELD_COUNT) {
         // No valid field is focused, nothing to do.
+        return;
+    }
+
+    // General lobby fields are editable only when the lobby itself is editable.
+    if (!state->editable) {
         return;
     }
 
@@ -1410,13 +1841,54 @@ void LobbyMenuUIHandleChar(LobbyMenuUIState *state, unsigned int codepoint) {
  * @param shiftDown True if the Shift key is currently held down.
  */
 void LobbyMenuUIHandleKeyDown(LobbyMenuUIState *state, WPARAM key, bool shiftDown) {
-    // If the state is NULL or not editable, there's nothing to do.
-    if (state == NULL || !state->editable) {
+    // If the state is NULL, there's nothing to do.
+    if (state == NULL) {
         return;
+    }
+
+    // Slot input fields have their own editing rules and should be handled first.
+    if (state->slotInputFocusIndex >= 0 && state->slotInputFocusIndex < (int)state->slotCount) {
+        size_t slotIndex = (size_t)state->slotInputFocusIndex;
+        if (!LobbyMenuCanEditSlotMeta(state, slotIndex)) {
+            // If permissions changed, clear focus so input does not leak to other slots.
+            LobbyMenuClearSlotInputFocus(state);
+            return;
+        }
+        bool isTeam = state->slotInputFocusTeam;
+        bool isShared = state->slotInputFocusSharedControl;
+
+        if (key == VK_BACK) {
+            if (isTeam) {
+                LobbyMenuBackspaceSlotNumber(state->slotTeamText[slotIndex], &state->slotTeamLength[slotIndex]);
+                LobbyMenuQueueSlotNumberSelection(state, slotIndex, true);
+            } else if (isShared) {
+                LobbyMenuBackspaceSlotNumber(state->slotSharedControlText[slotIndex], &state->slotSharedControlLength[slotIndex]);
+                LobbyMenuQueueSlotNumberSelection(state, slotIndex, false);
+            }
+            return;
+        }
+
+        if (key == VK_RETURN || key == VK_ESCAPE) {
+            // We exit slot editing on Enter/Escape to avoid accidental game start.
+            LobbyMenuClearSlotInputFocus(state);
+            return;
+        }
+
+        if (key == VK_TAB) {
+            // Tab currently does not move through slot inputs, 
+            // and instead just clears focus and lets normal focus flow handle future input.
+            LobbyMenuClearSlotInputFocus(state);
+            return;
+        }
     }
 
     // Determine which field is focused.
     int index = FocusToIndex(state->focus);
+
+    // General lobby fields are editable only when the lobby itself is editable.
+    if (!state->editable) {
+        return;
+    }
     switch (key) {
         // Backspace deletes the last character in the focused field.
         case VK_BACK:
@@ -1517,6 +1989,50 @@ bool LobbyMenuUIConsumeAISelection(LobbyMenuUIState *state, size_t *outSlotIndex
 }
 
 /**
+ * Consumes a pending team selection from the lobby UI, if one exists.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outSlotIndex Output slot index whose team selection changed.
+ * @param outTeamNumber Output team number, or -1 for none.
+ * @return True if a selection was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeTeamSelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outTeamNumber) {
+    if (state == NULL || outSlotIndex == NULL || outTeamNumber == NULL) {
+        return false;
+    }
+
+    if (!state->teamSelectionPending) {
+        return false;
+    }
+
+    *outSlotIndex = state->teamSelectionSlotIndex;
+    *outTeamNumber = state->teamSelectionValue;
+    state->teamSelectionPending = false;
+    return true;
+}
+
+/**
+ * Consumes a pending shared control selection from the lobby UI, if one exists.
+ * @param state Pointer to the LobbyMenuUIState.
+ * @param outSlotIndex Output slot index whose shared control selection changed.
+ * @param outSharedControlNumber Output shared control number, or -1 for none.
+ * @return True if a selection was pending, false otherwise.
+ */
+bool LobbyMenuUIConsumeSharedControlSelection(LobbyMenuUIState *state, size_t *outSlotIndex, int *outSharedControlNumber) {
+    if (state == NULL || outSlotIndex == NULL || outSharedControlNumber == NULL) {
+        return false;
+    }
+
+    if (!state->sharedControlSelectionPending) {
+        return false;
+    }
+
+    *outSlotIndex = state->sharedControlSelectionSlotIndex;
+    *outSharedControlNumber = state->sharedControlSelectionValue;
+    state->sharedControlSelectionPending = false;
+    return true;
+}
+
+/**
  * Renders the lobby menu UI using OpenGL.
  * Draws panels, input fields, buttons, and status messages.
  * @param state Pointer to the LobbyMenuUIState to render.
@@ -1606,6 +2122,50 @@ void LobbyMenuUIDraw(LobbyMenuUIState *state, OpenGLContext *context, int width,
         // Draw the slot line text near the top of the row so there is space for AI info.
         float lineY = rowY + MENU_GENERIC_TEXT_HEIGHT;
         DrawScreenText(context, line, slotArea.x, lineY, MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
+
+        // Draw the team number input box.
+        MenuUIRect teamRect = LobbyMenuComputeTeamRect(&slotArea, rowY);
+        float teamOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+        float teamFill[4] = MENU_INPUT_BOX_FILL_COLOR;
+        if (state->slotInputFocusIndex == (int)i && state->slotInputFocusTeam) {
+            // Focused fields receive a stronger outline to make it obvious where typing will go.
+            teamOutline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
+        }
+        DrawOutlinedRectangle(teamRect.x, teamRect.y, teamRect.x + teamRect.width,
+            teamRect.y + teamRect.height, teamOutline, teamFill);
+
+        char teamLine[64];
+        const char *teamText = state->slotTeamText[i];
+        if (teamText[0] == '\0') {
+            snprintf(teamLine, sizeof(teamLine), "Team: ");
+        } else {
+            snprintf(teamLine, sizeof(teamLine), "Team: %s", teamText);
+        }
+        float teamLineY = teamRect.y + MENU_GENERIC_TEXT_HEIGHT + 2.0f;
+        DrawScreenText(context, teamLine, teamRect.x + 6.0f, teamLineY,
+            MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
+
+        // Draw the shared control input box to the right of the team box.
+        MenuUIRect sharedRect = LobbyMenuComputeSharedControlRect(&slotArea, rowY);
+        float sharedOutline[4] = MENU_INPUT_BOX_OUTLINE_COLOR;
+        float sharedFill[4] = MENU_INPUT_BOX_FILL_COLOR;
+        if (state->slotInputFocusIndex == (int)i && state->slotInputFocusSharedControl) {
+            // Focused fields receive a stronger outline to make it obvious where typing will go.
+            sharedOutline[3] = MENU_INPUT_BOX_FOCUSED_ALPHA;
+        }
+        DrawOutlinedRectangle(sharedRect.x, sharedRect.y, sharedRect.x + sharedRect.width,
+            sharedRect.y + sharedRect.height, sharedOutline, sharedFill);
+
+        char sharedLine[64];
+        const char *sharedText = state->slotSharedControlText[i];
+        if (sharedText[0] == '\0') {
+            snprintf(sharedLine, sizeof(sharedLine), "Archon: ");
+        } else {
+            snprintf(sharedLine, sizeof(sharedLine), "Archon: %s", sharedText);
+        }
+        float sharedLineY = sharedRect.y + MENU_GENERIC_TEXT_HEIGHT + 2.0f;
+        DrawScreenText(context, sharedLine, sharedRect.x + 6.0f, sharedLineY,
+            MENU_GENERIC_TEXT_HEIGHT, MENU_GENERIC_TEXT_WIDTH, slotColor);
 
         // Draw a visible box for the AI selection so the click target is obvious.
         MenuUIRect aiRect = LobbyMenuComputeAIRect(&slotArea, rowY);

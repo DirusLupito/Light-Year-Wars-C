@@ -68,7 +68,7 @@
 
 // Time in milliseconds the server shall wait for a message before considering
 // a client to have timed out.
-#define CLIENT_TIMEOUT_MS 60000
+#define CLIENT_TIMEOUT_MS 180000
 
 /**
  * Defines the various stages the server application can be in.

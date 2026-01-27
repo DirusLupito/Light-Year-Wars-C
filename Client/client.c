@@ -140,6 +140,8 @@ static void ProcessNetworkMessages(void);
 static void SendJoinRequest(const char *playerName);
 static void SendDisconnectNotice(void);
 static void SendLobbyColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b);
+static void SendLobbyTeamUpdate(int factionId, int teamNumber);
+static void SendLobbySharedControlUpdate(int factionId, int sharedControlNumber);
 static void ProcessMenuConnectRequest(void);
 static void RenderFrame(float fps);
 static void DrawSelectionBox(void);
@@ -270,6 +272,28 @@ static void DrawSelectionBox(void) {
 }
 
 /**
+ * Determines whether the local faction can control a planet.
+ * Shared control allows issuing orders from allied planets with matching control metadata.
+ * @param controller Pointer to the faction attempting to issue orders.
+ * @param planet Pointer to the planet in question.
+ * @return true if the planet can be controlled, false otherwise.
+ */
+static bool ClientCanControlPlanet(const Faction *controller, const Planet *planet) {
+    // Without valid inputs or ownership, control is not possible.
+    if (controller == NULL || planet == NULL || planet->owner == NULL) {
+        return false;
+    }
+
+    // Ownership always grants control.
+    if (planet->owner == controller) {
+        return true;
+    }
+
+    // Otherwise shared control requires matching team and archon numbers.
+    return FactionSharesControl(controller, planet->owner);
+}
+
+/**
  * Helper function to apply the box selection
  * to the player's selection state.
  * @param additive When true, the selected planets are added to the existing selection.
@@ -297,11 +321,11 @@ static void ApplyBoxSelection(bool additive) {
     float maxY = fmaxf(boxSelectStartWorld.y, boxSelectCurrentWorld.y);
 
     // Iterate through all planets and select those within the box
-    // that are owned by the local faction.
+    // that the local faction can control.
     size_t limit = level.planetCount < selectionState.capacity ? level.planetCount : selectionState.capacity;
     for (size_t i = 0; i < limit; ++i) {
         const Planet *planet = &level.planets[i];
-        if (planet->owner != localFaction) {
+        if (!ClientCanControlPlanet(localFaction, planet)) {
             continue;
         }
 
@@ -345,9 +369,9 @@ static void HandleClickSelection(Vec2 mousePos, bool additive) {
         return;
     }
 
-    // If the clicked planet is not owned by the local faction,
+    // If the clicked planet is not controllable by the local faction,
     // clear selection if not additive.
-    if (clicked->owner != localFaction) {
+    if (!ClientCanControlPlanet(localFaction, clicked)) {
         if (!additive) {
             PlayerSelectionClear(&selectionState);
         }
@@ -947,6 +971,15 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
         return;
     }
 
+    // Cache slot focus before we rebuild UI state so typing does not lose focus on server echo.
+    int focusedSlotIndex = lobbyMenuUI.slotInputFocusIndex;
+    bool focusedTeam = lobbyMenuUI.slotInputFocusTeam;
+    bool focusedShared = lobbyMenuUI.slotInputFocusSharedControl;
+    int focusedFactionId = -1;
+    if (focusedSlotIndex >= 0 && focusedSlotIndex < (int)lobbyMenuUI.slotCount) {
+        focusedFactionId = lobbyMenuUI.slotFactionIds[focusedSlotIndex];
+    }
+
     // Ensure the faction count does not exceed the maximum slots.
     size_t slotCount = (size_t)packet->factionCount;
     if (slotCount > LOBBY_MENU_MAX_SLOTS) {
@@ -980,6 +1013,8 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
         const char *slotName = occupied ? slots[i].playerName : "";
         LobbyMenuUISetSlotInfo(&lobbyMenuUI, i, slots[i].factionId, occupied, slotName);
         LobbyMenuUISetSlotAI(&lobbyMenuUI, i, slots[i].aiIndex);
+        LobbyMenuUISetSlotTeam(&lobbyMenuUI, i, slots[i].teamNumber);
+        LobbyMenuUISetSlotSharedControl(&lobbyMenuUI, i, slots[i].sharedControlNumber);
         LobbyMenuUISetSlotColor(&lobbyMenuUI, i, slots[i].color);
     }
 
@@ -988,6 +1023,20 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
     LobbyMenuUISetHighlightedFactionId(&lobbyMenuUI, assignedFactionId);
     LobbyMenuUISetColorEditAuthority(&lobbyMenuUI, false, assignedFactionId);
     LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Waiting for host to start game.");
+
+    // Restore focus only for the local slot so client input remains stable during updates.
+    if (focusedFactionId >= 0 && focusedFactionId == assignedFactionId && (focusedTeam || focusedShared)) {
+        int restoreIndex = -1;
+        for (size_t i = 0; i < slotCount; ++i) {
+            if (slots[i].factionId == focusedFactionId) {
+                restoreIndex = (int)i;
+                break;
+            }
+        }
+        if (restoreIndex >= 0) {
+            LobbyMenuUISetSlotInputFocus(&lobbyMenuUI, (size_t)restoreIndex, focusedTeam, focusedShared);
+        }
+    }
 
     // Mark the preview dirty so it regenerates with the new lobby state.
     LobbyPreviewMarkDirty(&lobbyPreview);
@@ -1244,6 +1293,60 @@ static void SendLobbyColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b)
 
     if (result == SOCKET_ERROR) {
         printf("lobby color sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Sends a lobby team update to the server for the specified faction.
+ * @param factionId The faction ID whose team is being updated.
+ * @param teamNumber The team number to apply, or -1 for none.
+ */
+static void SendLobbyTeamUpdate(int factionId, int teamNumber) {
+    if (!serverAddressValid || clientSocket == INVALID_SOCKET) {
+        return;
+    }
+
+    LevelLobbyTeamPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_LOBBY_TEAM;
+    packet.factionId = factionId;
+    packet.teamNumber = teamNumber;
+
+    int result = sendto(clientSocket,
+        (const char *)&packet,
+        (int)sizeof(packet),
+        0,
+        (struct sockaddr *)&serverAddress,
+        (int)sizeof(serverAddress));
+
+    if (result == SOCKET_ERROR) {
+        printf("lobby team sendto failed: %d\n", WSAGetLastError());
+    }
+}
+
+/**
+ * Sends a lobby shared control/archon number update to the server for the specified faction.
+ * @param factionId The faction ID whose shared control is being updated.
+ * @param sharedControlNumber The shared control number to apply, or -1 for none.
+ */
+static void SendLobbySharedControlUpdate(int factionId, int sharedControlNumber) {
+    if (!serverAddressValid || clientSocket == INVALID_SOCKET) {
+        return;
+    }
+
+    LevelLobbySharedControlPacket packet = {0};
+    packet.type = LEVEL_PACKET_TYPE_LOBBY_SHARED_CONTROL;
+    packet.factionId = factionId;
+    packet.sharedControlNumber = sharedControlNumber;
+
+    int result = sendto(clientSocket,
+        (const char *)&packet,
+        (int)sizeof(packet),
+        0,
+        (struct sockaddr *)&serverAddress,
+        (int)sizeof(serverAddress));
+
+    if (result == SOCKET_ERROR) {
+        printf("lobby shared control sendto failed: %d\n", WSAGetLastError());
     }
 }
 
@@ -2051,6 +2154,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 }
                 // Keep the preview synchronized with newly committed colors.
                 LobbyPreviewMarkDirty(&lobbyPreview);
+            }
+
+            // Send any committed team updates for the local faction.
+            size_t teamSlotIndex = 0;
+            int teamNumber = -1;
+            if (LobbyMenuUIConsumeTeamSelection(&lobbyMenuUI, &teamSlotIndex, &teamNumber)) {
+                if ((int)teamSlotIndex == assignedFactionId) {
+                    SendLobbyTeamUpdate((int)teamSlotIndex, teamNumber);
+                }
+            }
+
+            // Send any committed shared control/archon number updates for the local faction.
+            size_t sharedSlotIndex = 0;
+            int sharedControlNumber = -1;
+            if (LobbyMenuUIConsumeSharedControlSelection(&lobbyMenuUI, &sharedSlotIndex, &sharedControlNumber)) {
+                if ((int)sharedSlotIndex == assignedFactionId) {
+                    SendLobbySharedControlUpdate((int)sharedSlotIndex, sharedControlNumber);
+                }
             }
         }
 

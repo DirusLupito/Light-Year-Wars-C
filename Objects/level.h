@@ -55,6 +55,12 @@
 // Type value for a join request packet (client -> server)
 #define LEVEL_PACKET_TYPE_JOIN_REQUEST 11u
 
+// Type value for a lobby team update packet (client -> server)
+#define LEVEL_PACKET_TYPE_LOBBY_TEAM 12u
+
+// Type value for a lobby shared control update packet (client -> server)
+#define LEVEL_PACKET_TYPE_LOBBY_SHARED_CONTROL 13u
+
 // Definitions of packet structures used for network transmission.
 // We use #pragma pack(push, 1) to ensure there is no padding added by the compiler.
 // This translates to "pack the following structures with 1-byte alignment".
@@ -65,10 +71,15 @@
 
 // A LevelPacketFactionInfo represents the network representation of a faction.
 // It is used to communicate faction information over the network.
-// A faction has an ID and a color (RGBA), so we include these fields here.
+// A faction has an ID, a color (RGBA), a team number, and a shared control number.
+// Factions on the same team will add to each other's fleets when "attacking"
+// each other's planets. Factions with the same shared control/archon number
+// and the same team number can issue commands to each other's planets.
 typedef struct LevelPacketFactionInfo {
     int32_t id;
     float color[4];
+    int32_t teamNumber; /* Team assignment, or -1 for none. */
+    int32_t sharedControlNumber; /* Shared control/archon number, or -1 for none. */
 } LevelPacketFactionInfo;
 
 // A LevelPacketPlanetFullInfo represents the full network representation of a planet.
@@ -171,6 +182,8 @@ typedef struct LevelJoinRequestPacket {
 typedef struct LevelLobbySlotInfo {
     int32_t factionId;
     int32_t aiIndex;
+    int32_t teamNumber; /* Team assignment, or -1 for none. */
+    int32_t sharedControlNumber; /* Shared control/archon number, or -1 for none. */
     uint8_t occupied;
     uint8_t reserved[3];
     float color[4];
@@ -206,6 +219,22 @@ typedef struct LevelLobbyColorPacket {
     uint8_t b;
     uint8_t reserved;
 } LevelLobbyColorPacket;
+
+// A LevelLobbyTeamPacket communicates a team number change for a faction.
+// Sent by clients to the server when they commit a team change in the lobby.
+typedef struct LevelLobbyTeamPacket {
+    uint32_t type;
+    int32_t factionId;
+    int32_t teamNumber;
+} LevelLobbyTeamPacket;
+
+// A LevelLobbySharedControlPacket communicates a shared control number change.
+// Sent by clients to the server when they commit a shared control change in the lobby.
+typedef struct LevelLobbySharedControlPacket {
+    uint32_t type;
+    int32_t factionId;
+    int32_t sharedControlNumber;
+} LevelLobbySharedControlPacket;
 
 // A LevelMoveOrderPacket communicates a set of origin planets and a destination
 // planet for fleet movement requests. It is sent by clients to the server.

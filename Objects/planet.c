@@ -593,11 +593,10 @@ void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
 
     // Handle the interaction based on the planet's ownership status.
     if (planet->owner != NULL) {
-
         // Planet is owned.
-        if (planet->owner == attacker) {
-            // One ship from owner increases fleet size
-            // by 1.0f.
+        if (FactionIsFriendly(planet->owner, attacker)) {
+            // Friendly reinforcements strengthen allied planets,
+            // allowing for more interesting cooperative team play.
             planet->currentFleetSize += 1.0f;
             return;
         }
@@ -631,9 +630,9 @@ void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
     }
 
     // Planet is unowned but claimed.
-    if (planet->claimant == attacker) {
-        // One ship from claimant increases fleet size
-        // by 1.0f.
+    if (FactionIsFriendly(planet->claimant, attacker)) {
+        // Friendly ships should advance the existing claim
+        // so allied teams can capture planets cooperatively.
         planet->currentFleetSize += 1.0f;
         if (planet->currentFleetSize >= planet->maxFleetCapacity && planet->maxFleetCapacity > 0.0f) {
             // If the claimant's fleet size meets or exceeds max capacity,

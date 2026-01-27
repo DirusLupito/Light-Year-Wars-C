@@ -8,6 +8,29 @@
 #include "Utilities/playerInterfaceUtilities.h"
 
 /**
+ * Determines whether the controlling faction can issue orders from a planet.
+ * Shared control permissions allow allied factions with matching control/archon numbers
+ * to treat each other's planets as selectable sources for orders.
+ * @param controller Pointer to the faction issuing orders.
+ * @param planet Pointer to the planet to test.
+ * @return true if the planet can be controlled, false otherwise.
+ */
+static bool PlayerCanControlPlanet(const Faction *controller, const Planet *planet) {
+    // Without valid inputs or ownership, control is not possible.
+    if (controller == NULL || planet == NULL || planet->owner == NULL) {
+        return false;
+    }
+
+    // Direct ownership always grants control.
+    if (planet->owner == controller) {
+        return true;
+    }
+
+    // Shared control only applies when both factions opt in with matching metadata.
+    return FactionSharesControl(controller, planet->owner);
+}
+
+/**
  * Resets the player's selection state to accommodate a new number of planets.
  * Typically called when the level is (re)initialized.
  * Allocates or reallocates the selection buffer as needed.
@@ -166,7 +189,7 @@ bool PlayerSelectionSet(PlayerSelectionState *state, size_t index, bool selected
 }
 
 /**
- * Selects all planets owned by the specified faction.
+ * Selects all planets owned or shared-controlled by the specified faction.
  * @param state Pointer to the PlayerSelectionState to update.
  * @param level Pointer to the current Level structure.
  * @param owner Pointer to the owning faction.
@@ -203,7 +226,7 @@ bool PlayerSelectionSelectOwned(PlayerSelectionState *state,
     // or the selection state's capacity to avoid out-of-bounds access.
     size_t limit = level->planetCount < state->capacity ? level->planetCount : state->capacity;
     for (size_t i = 0; i < limit; ++i) {
-        if (level->planets[i].owner == owner) {
+        if (PlayerCanControlPlanet(owner, &level->planets[i])) {
             PlayerSelectionSet(state, i, true);
             processed += 1;
         }
@@ -377,7 +400,8 @@ bool PlayerControlGroupsAdd(PlayerControlGroups *groups,
 }
 
 /**
- * Applies the specified control group to the current selection, filtering by ownership.
+ * Applies the specified control group to the current selection, filtering by ownership
+ * and shared control permissions.
  * @param groups Pointer to the PlayerControlGroups to read from.
  * @param groupIndex Index of the control group (0-9).
  * @param level Pointer to the current Level structure.
@@ -423,7 +447,7 @@ bool PlayerControlGroupsApply(const PlayerControlGroups *groups,
         if (!groups->groups[groupIndex][i]) {
             continue;
         }
-        if (level->planets[i].owner != owner) {
+        if (!PlayerCanControlPlanet(owner, &level->planets[i])) {
             continue;
         }
         if (PlayerSelectionSet(selection, i, true)) {

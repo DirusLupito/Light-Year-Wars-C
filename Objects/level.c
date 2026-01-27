@@ -594,6 +594,11 @@ bool LevelApplyFullPacket(Level *level, const void *data, size_t size) {
             level->factions[i].color[c] = factionInfo[i].color[c];
         }
 
+        // Team metadata is required for friendly-fire and shared control rules.
+        // We route through setters so invalid values normalize to "none".
+        FactionSetTeamNumber(&level->factions[i], (int)factionInfo[i].teamNumber);
+        FactionSetSharedControlNumber(&level->factions[i], (int)factionInfo[i].sharedControlNumber);
+
         // Network packets do not carry AI assignments, so we clear them here.
         level->factions[i].aiPersonality = NULL;
     }
@@ -823,6 +828,10 @@ bool LevelCreateFullPacketBuffer(const Level *level, LevelPacketBuffer *outBuffe
         for (size_t c = 0; c < 4; ++c) {
             factionInfo[i].color[c] = level->factions[i].color[c];
         }
+
+        // Include team metadata so clients can enforce friendly and shared control behavior.
+        factionInfo[i].teamNumber = (int32_t)level->factions[i].teamNumber;
+        factionInfo[i].sharedControlNumber = (int32_t)level->factions[i].sharedControlNumber;
     }
 
     // Now we advance the cursor past the faction info array
