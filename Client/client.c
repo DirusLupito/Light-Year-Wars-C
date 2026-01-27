@@ -25,6 +25,9 @@ static LobbyMenuUIState lobbyMenuUI = {0};
 // Element of the lobby UI which handles showing a preview of the generated level.
 static LobbyPreviewContext lobbyPreview = {0};
 
+// Overlay UI for presenting victory/defeat at the end of a match.
+static GameOverUIState gameOverUI = {0};
+
 // -- Window and rendering variables --
 
 // Running = true while the main loop should continue
@@ -100,6 +103,11 @@ static bool boxSelectActive = false;
 // Indicates whether the player is currently dragging a box selection.
 static bool boxSelectDragging = false;
 
+// Indicates whether the current match has ended.
+// We keep this separate from the overlay so camera updates continue after game over
+// while game updates are frozen.
+static bool gameOverActive = false;
+
 // Starting position of the box selection drag in terms of screen coordinates.
 // Used to determine if the mouse has moved enough to be considered a drag.
 static Vec2 boxSelectStartScreen = {0.0f, 0.0f};
@@ -155,6 +163,8 @@ static Vec2 ScreenToWorld(Vec2 screen);
 static Vec2 WorldToScreen(Vec2 world);
 static void RefreshCameraBounds(void);
 static bool IsServerFullMessage(const uint8_t *data, size_t length);
+static bool GameOverOverlayConsumesInput(void);
+static void UpdateGameOverOverlay(void);
 
 /**
  * Helper function to draw selection highlights
@@ -674,6 +684,56 @@ static void RefreshLocalFaction(void) {
 }
 
 /**
+ * Returns true when the game over overlay should consume gameplay input.
+ * This keeps selection and camera controls from leaking through the overlay.
+ * @return True if the overlay is active during gameplay, false otherwise.
+ */
+static bool GameOverOverlayConsumesInput(void) {
+    return currentStage == CLIENT_STAGE_GAME && GameOverUIIsVisible(&gameOverUI);
+}
+
+/**
+ * Checks for a winning team and shows the game over overlay once per match.
+ * The overlay remains hidden after dismissal until the next match resets it.
+ */
+static void UpdateGameOverOverlay(void) {
+    // The overlay only applies during an active game with a valid level.
+    if (currentStage != CLIENT_STAGE_GAME || !levelInitialized) {
+        return;
+    }
+
+    // Avoid re-evaluating once the match is marked over.
+    if (gameOverActive) {
+        return;
+    }
+
+    int winningTeam = FACTION_TEAM_NONE;
+    int winningFactionId = -1;
+    if (!GameOverUIComputeWinningTeam(&level, &winningTeam, &winningFactionId)) {
+        return;
+    }
+
+    // Mark the match as finished so gameplay updates stop after this point.
+    gameOverActive = true;
+
+    // Avoid reopening the overlay after the player already dismissed it.
+    if (GameOverUIIsAcknowledged(&gameOverUI)) {
+        return;
+    }
+
+    // Resolve victory or defeat for this client based on their assigned faction.
+    GameOverUIResult result = GameOverUIGetResultForFaction(&level, assignedFactionId, winningTeam, winningFactionId);
+
+    // If the client does not own a valid faction, show a neutral result instead.
+    if (result == GAME_OVER_UI_RESULT_NONE) {
+        GameOverUIShowResult(&gameOverUI, GAME_OVER_UI_RESULT_NONE);
+        return;
+    }
+
+    GameOverUIShowResult(&gameOverUI, result);
+}
+
+/**
  * Handles a full packet message received from the server.
  * Applies the full level state contained in the packet.
  * Will fill in the level structure and mark it as initialized.
@@ -714,6 +774,12 @@ static void HandleFullPacketMessage(const uint8_t *data, size_t length) {
     // Reset box selection state.
     boxSelectActive = false;
     boxSelectDragging = false;
+
+    // Clear game-over state because the full packet represents a fresh match state.
+    gameOverActive = false;
+
+    // Clear any previous game over overlay so new matches start clean.
+    GameOverUIReset(&gameOverUI);
 
     // Reset camera to a known baseline so we can compute a deterministic start view.
     cameraState.position = Vec2Zero();
@@ -849,6 +915,12 @@ static void ResetConnectionToMenu(const char *statusMessage) {
 
     // Reset preview state so the next lobby session starts clean.
     LobbyPreviewReset(&lobbyPreview);
+
+    // Reset game over UI so no stale overlay appears after reconnecting.
+    GameOverUIReset(&gameOverUI);
+
+    // Clear the match-over flag since we are no longer in gameplay.
+    gameOverActive = false;
 
     // Reset lobby UI to its default read-only state.
     LobbyMenuUIInitialize(&lobbyMenuUI, false);
@@ -1055,8 +1127,12 @@ static void HandleLobbyStatePacketMessage(const uint8_t *data, size_t length) {
         PlayerControlGroupsReset(&controlGroups, 0);
         boxSelectActive = false;
         boxSelectDragging = false;
+        // Clear game-over state so the lobby does not inherit a finished match.
+        gameOverActive = false;
         currentStage = CLIENT_STAGE_LOBBY;
         LoginMenuUISetStatusMessage(&loginMenuUI, "Connected to lobby.");
+        // The lobby should always clear any game over overlay from the prior match.
+        GameOverUIReset(&gameOverUI);
     }
 }
 
@@ -1094,6 +1170,12 @@ static void HandleStartGamePacketMessage(const uint8_t *data, size_t length) {
     LobbyPreviewReset(&lobbyPreview);
     localFaction = NULL;
     LobbyMenuUISetStatusMessage(&lobbyMenuUI, "Loading game...");
+
+    // Clear game-over state because a new match is about to begin.
+    gameOverActive = false;
+
+    // Reset game over state so the upcoming match can trigger a fresh overlay.
+    GameOverUIReset(&gameOverUI);
 }
 
 /**
@@ -1566,6 +1648,11 @@ static void RenderFrame(float fps) {
         LoginMenuUIDraw(&loginMenuUI, &openglContext, openglContext.width, openglContext.height);
     }
 
+    // Draw the game-over overlay last so it stays on top of gameplay UI.
+    if (currentStage == CLIENT_STAGE_GAME && GameOverUIIsVisible(&gameOverUI)) {
+        GameOverUIDraw(&gameOverUI, &openglContext, openglContext.width, openglContext.height);
+    }
+
     // Swap the front and back buffers to display the rendered frame.
     // There's two buffers, one being displayed while the other is drawn to.
     // Swapping them makes the newly drawn frame visible, while taking the
@@ -1637,6 +1724,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // While the game-over overlay is visible, it owns mouse input.
+            if (GameOverOverlayConsumesInput()) {
+                GameOverUIHandleMouseDown(&gameOverUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
             // The handling for mouse input depends on the current client stage.
 
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
@@ -1688,6 +1781,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // Keep overlay hover feedback responsive when it is visible.
+            if (GameOverOverlayConsumesInput()) {
+                GameOverUIHandleMouseMove(&gameOverUI, (float)x, (float)y);
+                return 0;
+            }
+
             // The handling for mouse input depends on the current client stage.
 
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
@@ -1733,6 +1832,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         case WM_LBUTTONUP: {
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
+
+            // Let the overlay handle button releases to confirm dismissal.
+            if (GameOverOverlayConsumesInput()) {
+                GameOverUIHandleMouseUp(&gameOverUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
 
             // The handling for mouse input depends on the current client stage.
 
@@ -1789,6 +1894,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // Right mouse button is used to issue move orders to selected planets.
         case WM_RBUTTONDOWN: {
 
+            // The overlay blocks command input until the player acknowledges the result.
+            if (GameOverOverlayConsumesInput()) {
+                return 0;
+            }
+
             // Right mouse button clicks are meaningless outside of the game stage.
 
             if (currentStage != CLIENT_STAGE_GAME) {
@@ -1826,6 +1936,7 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // Mousewheel movement is for zooming the camera in and out in the game stage,
         // and for scrolling the menu UI in menu stages.
         case WM_MOUSEWHEEL: {
+            // We keep zoom input active after game over so players can inspect the final state.
             // The wheel delta indicates the amount and direction of wheel movement.
             // A positive value indicates forward movement (away from the user),
             // while a negative value indicates backward movement (towards the user).
@@ -1907,6 +2018,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // lParam contains additional information about the key event.
         case WM_KEYDOWN: {
 
+            // Ignore gameplay hotkeys while the game-over overlay is visible.
+            if (GameOverOverlayConsumesInput()) {
+                return 0;
+            }
+
             // The handling for keyboard input depends on the current client stage.
             
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
@@ -1983,6 +2099,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
         // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char
         case WM_CHAR: {
 
+            // Character input is ignored while the game-over overlay is visible.
+            if (GameOverOverlayConsumesInput()) {
+                return 0;
+            }
+
             // The handling for character input depends on the current client stage.
 
             if (currentStage == CLIENT_STAGE_LOGIN_MENU) {
@@ -2034,6 +2155,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     // Initialize the preview context so lobby previews can be generated on demand.
     LobbyPreviewInitialize(&lobbyPreview, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+
+    // Initialize the game over overlay so it is ready for the first match.
+    GameOverUIInitialize(&gameOverUI, false);
 
     // Initialize the login menu UI state so the player can enter connection info.
     LoginMenuUIInitialize(&loginMenuUI);
@@ -2191,13 +2315,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         // We only have the concept of a camera in the game stage,
         // and likewise we only have a level to update in the game stage.
         if (currentStage == CLIENT_STAGE_GAME) {
-            // Update the camera based on user input and elapsed time.
+            // Always update the camera so players can inspect the final state.
             UpdateCamera(window_handle, deltaTime);
 
             // If we have a level and time has passed, we must update the level state.
-            if (levelInitialized && deltaTime > 0.0f) {
+            // However, if the game is over, we stop updating the level
+            // to freeze the final state for player inspection.
+            if (!gameOverActive && levelInitialized && deltaTime > 0.0f) {
                 LevelUpdate(&level, deltaTime);
             }
+
+            // Detect match completion after applying the latest updates.
+            UpdateGameOverOverlay();
+
+            // Consume the overlay action so the player can dismiss it.
+            GameOverUIConsumeAction(&gameOverUI);
         } else if (currentStage == CLIENT_STAGE_LOBBY) {
             // Parse settings so the preview only regenerates on valid input.
             LobbyMenuGenerationSettings previewSettings = {0};

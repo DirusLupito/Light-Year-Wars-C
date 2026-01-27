@@ -46,6 +46,9 @@ static LobbyMenuUIState lobbyMenuUI = {0};
 // Centralized preview context shared across lobby preview helpers.
 static LobbyPreviewContext lobbyPreview = {0};
 
+// Overlay UI for presenting game-over state and returning to the lobby.
+static GameOverUIState gameOverUI = {0};
+
 // Current lobby generation settings.
 // This also controls the default settings used when initializing a new lobby.
 static LobbyMenuGenerationSettings lobbySettings = {
@@ -93,6 +96,8 @@ static void BroadcastLobbyStateToAll(void);
 static void SendLobbyStateToPlayerInstance(Player *player);
 static void ProcessLobbyUI();
 static bool AttemptStartGame(void);
+static void UpdateGameOverOverlay(void);
+static void ReturnServerToLobby(void);
 static int HighestOccupiedFactionId(void);
 static void ApplyFactionColorUpdate(int factionId, uint8_t r, uint8_t g, uint8_t b);
 static int FindAIPersonalityIndex(const AIPersonality *personality);
@@ -925,6 +930,9 @@ static bool AttemptStartGame(void) {
     cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
     RefreshCameraBounds();
 
+    // Clear any previous game-over overlay so the new match can trigger it again.
+    GameOverUIReset(&gameOverUI);
+
     // Notify all players that the game is starting and send them the full level packet.
     if (playerCount > 0) {
         BroadcastStartGame(server_socket, players, playerCount);
@@ -947,6 +955,64 @@ static bool AttemptStartGame(void) {
     LobbyMenuUISetEditable(&lobbyMenuUI, false);
     printf("Starting game with %zu players.\n", playerCount);
     return true;
+}
+
+/**
+ * Checks for a winning team and shows the game-over overlay when the match ends.
+ * This keeps the server in control of when the Return to Lobby action becomes available.
+ */
+static void UpdateGameOverOverlay(void) {
+    // The overlay is only relevant during active gameplay.
+    if (currentStage != SERVER_STAGE_GAME) {
+        return;
+    }
+
+    // We only want to raise the overlay once per match.
+    if (GameOverUIIsVisible(&gameOverUI)) {
+        return;
+    }
+
+    int winningTeam = FACTION_TEAM_NONE;
+    int winningFactionId = -1;
+    if (!GameOverUIComputeWinningTeam(&level, &winningTeam, &winningFactionId)) {
+        return;
+    }
+
+    // The server does not render a victory/defeat outcome, so the faction id is unused.
+    (void)winningFactionId;
+
+    // The server is neutral, so we use the generic label instead of victory/defeat.
+    GameOverUIShowResult(&gameOverUI, GAME_OVER_UI_RESULT_NONE);
+}
+
+/**
+ * Returns the server to the lobby after a match ends.
+ * Resets per-match state so clients receive a clean lobby state update.
+ */
+static void ReturnServerToLobby(void) {
+    // Clear the overlay first so it does not block lobby input.
+    GameOverUIReset(&gameOverUI);
+
+    // Reset accumulators and selections so the next match starts cleanly.
+    planetStateAccumulator = 0.0f;
+    aiActionAccumulator = 0.0f;
+    shipSpawnRNGState = SHIP_SPAWN_SEED;
+    selected_planet = NULL;
+
+    // Reset the camera so the lobby view is not biased by the last match.
+    CameraInitialize(&cameraState);
+    cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
+    cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
+    RefreshCameraBounds();
+
+    // Switch to the lobby stage before rebuilding UI state.
+    currentStage = SERVER_STAGE_LOBBY;
+
+    // Rebuild the lobby so connected clients get fresh settings and slots.
+    InitializeLobbyState();
+
+    // Ensure a lobby broadcast happens quickly so clients return promptly.
+    lobbyStateDirty = true;
 }
 
 /**
@@ -1014,6 +1080,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int y = (int)(short)HIWORD(lParam);
             Vec2 mouseScreen = {(float)x, (float)y};
 
+            // When the game over overlay is visible, it owns mouse input.
+            if (currentStage == SERVER_STAGE_GAME && GameOverUIIsVisible(&gameOverUI)) {
+                GameOverUIHandleMouseDown(&gameOverUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
             // Then handle lobby UI interactions.
             if (currentStage == SERVER_STAGE_LOBBY) {
                 // The lobby preview may consume the mouse down event.
@@ -1063,6 +1135,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // The overlay needs hover updates to keep the button feedback responsive.
+            if (currentStage == SERVER_STAGE_GAME && GameOverUIIsVisible(&gameOverUI)) {
+                GameOverUIHandleMouseMove(&gameOverUI, (float)x, (float)y);
+                return 0;
+            }
+
             if (currentStage == SERVER_STAGE_LOBBY) {
                 // The lobby preview may consume the mouse move event.
                 if (LobbyPreviewHandleMouseMove(&lobbyPreview, &lobbyMenuUI, x, y, &openglContext)) {
@@ -1080,6 +1158,12 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
             int x = (int)(short)LOWORD(lParam);
             int y = (int)(short)HIWORD(lParam);
 
+            // Allow the overlay to consume mouse releases while it is visible.
+            if (currentStage == SERVER_STAGE_GAME && GameOverUIIsVisible(&gameOverUI)) {
+                GameOverUIHandleMouseUp(&gameOverUI, (float)x, (float)y, openglContext.width, openglContext.height);
+                return 0;
+            }
+
             if (currentStage == SERVER_STAGE_LOBBY) {
                 // The lobby preview may consume the mouse up event.
                 if (LobbyPreviewHandleMouseUp(&lobbyPreview, &lobbyMenuUI, window_handle, x, y, &openglContext)) {
@@ -1093,6 +1177,11 @@ LRESULT CALLBACK WindowProcessMessage(HWND window_handle, UINT msg, WPARAM wPara
 
         // Mousewheel movement is for zooming the camera in and out.
         case WM_MOUSEWHEEL: {
+
+            // Ignore camera zooming while the game over overlay is active.
+            if (currentStage == SERVER_STAGE_GAME && GameOverUIIsVisible(&gameOverUI)) {
+                return 0;
+            }
 
             // The wheel delta indicates the amount and direction of wheel movement.
             // A positive value indicates forward movement (away from the user),
@@ -1902,6 +1991,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     cameraState.minZoom = SERVER_CAMERA_MIN_ZOOM;
     cameraState.maxZoom = SERVER_CAMERA_MAX_ZOOM;
     LobbyPreviewInitialize(&lobbyPreview, SERVER_CAMERA_MIN_ZOOM, SERVER_CAMERA_MAX_ZOOM);
+    // Initialize the game over overlay with server-specific behavior.
+    GameOverUIInitialize(&gameOverUI, true);
     InitializeLobbyState();
 
     printf("Entering main program loop...\n");
@@ -2068,21 +2159,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         // Depending on the current server stage, 
         // we either update the game state or process the lobby UI.
         if (currentStage == SERVER_STAGE_GAME) {
-            // Update the camera based on input
-            UpdateCamera(window_handle, delta_time);
+            // We pause gameplay updates while the game-over overlay is visible
+            // so the final state stays readable for the host.
+            bool gameOverVisible = GameOverUIIsVisible(&gameOverUI);
+            if (!gameOverVisible) {
+                // Update the camera based on input
+                UpdateCamera(window_handle, delta_time);
 
-            // Update the level state
-            LevelUpdate(&level, delta_time);
+                // Update the level state
+                LevelUpdate(&level, delta_time);
 
-            // We run AI actions at a fixed rate (default 2Hz) since there isn't much need
-            // to process them every frame. The game isn't that fast-paced (yet).
-            if (AI_ACTION_RATE > 0) {
-                float interval = 1.0f / (float)AI_ACTION_RATE;
-                aiActionAccumulator += delta_time;
-                while (aiActionAccumulator >= interval) {
-                    RunAIActions();
-                    aiActionAccumulator -= interval;
+                // We run AI actions at a fixed rate (default 2Hz) since there isn't much need
+                // to process them every frame. The game isn't that fast-paced (yet).
+                if (AI_ACTION_RATE > 0) {
+                    float interval = 1.0f / (float)AI_ACTION_RATE;
+                    aiActionAccumulator += delta_time;
+                    while (aiActionAccumulator >= interval) {
+                        RunAIActions();
+                        aiActionAccumulator -= interval;
+                    }
                 }
+            }
+
+            // Check for match completion after the simulation step.
+            UpdateGameOverOverlay();
+
+            // Consume the return-to-lobby action once the host acknowledges the result.
+            if (GameOverUIConsumeAction(&gameOverUI)) {
+                ReturnServerToLobby();
             }
         } else {
             ProcessLobbyUI();
@@ -2184,6 +2288,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             if (currentStage == SERVER_STAGE_LOBBY) {
                 LobbyMenuUIDraw(&lobbyMenuUI, &openglContext, openglContext.width, openglContext.height);
                 LobbyPreviewRender(&lobbyPreview, &lobbyMenuUI, &openglContext);
+            }
+
+            // Draw the game-over overlay last so it sits above gameplay visuals.
+            if (currentStage == SERVER_STAGE_GAME && GameOverUIIsVisible(&gameOverUI)) {
+                GameOverUIDraw(&gameOverUI, &openglContext, openglContext.width, openglContext.height);
             }
 
             // Display FPS in the top-left corner

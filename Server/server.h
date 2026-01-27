@@ -28,6 +28,7 @@
 #include "Utilities/cameraUtilities.h"
 #include "Utilities/MenuUtilities/lobbyMenuUtilities.h"
 #include "Utilities/MenuUtilities/lobbyPreviewUtilities.h"
+#include "Utilities/MenuUtilities/gameOverUIUtilities.h"
 #include "Objects/level.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
