@@ -588,6 +588,9 @@ void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
         return;
     }
 
+    // Play a lightweight impact cue so collisions feel more tactile.
+    SoundManagerPlayShipImpact();
+
     // We assume that the ship has an owner faction.
     const Faction *attacker = ship->owner;
 
@@ -617,6 +620,9 @@ void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
             planet->owner = attacker;
             planet->claimant = NULL;
             planet->currentFleetSize = fmaxf(surplus, 1.0f);
+
+            // Ownership changed as a result of combat, so play a capture cue.
+            SoundManagerPlayPlanetCaptured();
         }
         return;
     }
@@ -640,6 +646,9 @@ void PlanetHandleIncomingShip(Planet *planet, const Starship *ship) {
             planet->owner = planet->claimant;
             planet->claimant = NULL;
             planet->currentFleetSize = planet->maxFleetCapacity;
+
+            // Claimant has become the owner, so play the ownership change cue.
+            SoundManagerPlayPlanetCaptured();
         }
         return;
     }

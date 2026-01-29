@@ -34,6 +34,7 @@
 #include "Objects/player.h"
 #include "Utilities/MenuUtilities/lobbyPreviewUtilities.h"
 #include "Utilities/MenuUtilities/gameOverUIUtilities.h"
+#include "Utilities/soundManagerUtilities.h"
 
 // Minimum distance in pixels the mouse must move
 // for a left button drag to be considered a box selection 

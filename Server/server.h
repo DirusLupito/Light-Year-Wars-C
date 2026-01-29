@@ -29,6 +29,7 @@
 #include "Utilities/MenuUtilities/lobbyMenuUtilities.h"
 #include "Utilities/MenuUtilities/lobbyPreviewUtilities.h"
 #include "Utilities/MenuUtilities/gameOverUIUtilities.h"
+#include "Utilities/soundManagerUtilities.h"
 #include "Objects/level.h"
 #include "Objects/planet.h"
 #include "Objects/starship.h"
@@ -69,7 +70,7 @@
 
 // Time in milliseconds the server shall wait for a message before considering
 // a client to have timed out.
-#define CLIENT_TIMEOUT_MS 180000
+#define CLIENT_TIMEOUT_MS 1800000
 
 /**
  * Defines the various stages the server application can be in.

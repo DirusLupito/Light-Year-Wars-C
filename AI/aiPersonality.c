@@ -12,5 +12,5 @@
  * This is kept in a single array so UI and gameplay systems can iterate easily.
  */
 AIPersonality *g_aiPersonalities[AI_PERSONALITY_COUNT] = {
-	AI_PERSONALITIES
+    AI_PERSONALITIES
 };

@@ -1995,6 +1995,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     GameOverUIInitialize(&gameOverUI, true);
     InitializeLobbyState();
 
+    // Initialize the sound manager so ownership cues can be played.
+    SoundManagerInitialize();
+
+    // Server does not play sounds itself, so we set volume to zero.
+    SoundManagerSetVolume(0.0f);
+
     printf("Entering main program loop...\n");
 
     //Main program loop.
@@ -2324,6 +2330,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     WSACleanup();
     LevelRelease(&level);
     LobbyPreviewRelease(&lobbyPreview);
+
+    // Disable sound playback before releasing OS resources.
+    SoundManagerShutdown();
     OpenGLShutdownForWindow(&openglContext, window_handle);
     return EXIT_SUCCESS;
 }

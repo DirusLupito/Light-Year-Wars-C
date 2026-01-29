@@ -14,6 +14,7 @@
 #include "Utilities/renderUtilities.h"
 #include "Objects/faction.h"
 #include "Objects/vec2.h"
+#include "Utilities/soundManagerUtilities.h"
 
 // Forward declarations
 // of necessary structs to avoid circular dependencies.

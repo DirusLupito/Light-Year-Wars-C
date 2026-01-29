@@ -2240,6 +2240,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         return EXIT_FAILURE;
     }
 
+    // Initialize the sound manager so gameplay cues can be played.
+    SoundManagerInitialize();
+
     // Set up timing variables for the main loop's delta time calculation.
     previousTicks = GetTicks();
     tickFrequency = GetTickFrequency();
@@ -2365,6 +2368,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     PlayerControlGroupsFree(&controlGroups);
     LevelRelease(&level);
     LobbyPreviewRelease(&lobbyPreview);
+
+    // Disable sound playback before releasing other OS resources.
+    SoundManagerShutdown();
 
     if (clientSocket != INVALID_SOCKET) {
         closesocket(clientSocket);
