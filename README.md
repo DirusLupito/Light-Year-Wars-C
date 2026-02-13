@@ -42,12 +42,11 @@ Slot rundown:
 - Color: edit the faction color using the RGB picker.
 - Preview Level: opens/closes the level preview panel.
 
-Press tab to move to the next lower field,
-or shift tab to move to the next upper field. Press enter to attempt to start the game.
+Press tab to move to the next lower field, or shift tab to move to the next upper field. Press enter to attempt to start the game.
 
 The client may only edit lobby setting pertaining directly to their slot (so their own team and archon numbers 
 and their own color.) The client may not set themselves to be played as an AI, and neither can the server until
-the player is not longer occupying the slot.
+the player is no longer occupying the slot.
 
 ## In-game
 
@@ -56,6 +55,7 @@ Selection and orders:
 - Drag with left click to box-select planets.
 - Hold Shift to add to selection; without Shift, a new selection replaces the old one.
 - Right click a destination planet to send ships from all selected planets.
+- F2 selects all planets owned (or shared-controlled) by your faction.
 
 Camera:
 - Pan with WASD or arrow keys.
@@ -66,5 +66,4 @@ Control groups:
 - Number keys 0-9 recall control groups.
 - Ctrl + number overwrites a control group with the current selection.
 - Shift + number adds the current selection to that control group.
-- F2 selects all planets owned (or shared-controlled) by your faction.
 
